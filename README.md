@@ -17,10 +17,12 @@
   <a href="https://www.cs.princeton.edu/~smr/">Szymon Rusinkiewicz</a>
 </p>
 
-<p align="center"><sub>Princeton · UC Berkeley · MIT · NTU</sub></p>
+<p align="center">Princeton · UC Berkeley · MIT · NTU</p>
 
 <div align="center">
-    <video src="https://linzhanm.github.io/unimate/assets/demo.mp4" poster="https://linzhanm.github.io/unimate/assets/posters/demo.jpg" autoplay loop muted playsinline style="max-width: 100%;"></video>
+
+https://github.com/user-attachments/assets/a4efca07-8673-4ddf-8057-b8be7b008265
+
 </div>
 
 
