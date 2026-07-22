@@ -27,10 +27,6 @@ https://github.com/user-attachments/assets/a4efca07-8673-4ddf-8057-b8be7b008265
 
 ---
 
-## 🔍 Overview
-
-UniMate is a single model that animates **arbitrary skeletons** from a rigged 3D asset and a text prompt. It is built on a **topology-aware diffusion transformer** that conditions generation on skeletal structure through graph-aware attention, spectral position embeddings derived from the graph Laplacian, and a global topological conditioner. This lets one model generalize across widely different rigs — humanoids, animals, and articulated objects — without per-skeleton retraining or test-time optimization.
-
 ## 📜 News
 
 - **[TODO]** Training code and the UniML3D dataset will be released in this repository around August 2026.
