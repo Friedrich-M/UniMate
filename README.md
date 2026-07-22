@@ -19,11 +19,13 @@
 
 <p align="center">Princeton · UC Berkeley · MIT · NTU</p>
 
+<!--
 <div align="center">
 
 https://github.com/user-attachments/assets/a4efca07-8673-4ddf-8057-b8be7b008265
 
 </div>
+-->
 
 ---
 
