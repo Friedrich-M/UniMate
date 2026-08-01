@@ -4,7 +4,8 @@
 
 <p align="center">
   <a href="https://linzhanm.github.io/unimate/"><img alt="Project Page" src="https://img.shields.io/badge/Project_Page-6D28D9?style=for-the-badge&logo=githubpages&logoColor=white"></a>
-  <a href="https://linzhanm.github.io/unimate/#examples"><img alt="Interactive Demo" src="https://img.shields.io/badge/Interactive_Demo-0EA5E9?style=for-the-badge&logo=threedotjs&logoColor=white"></a>
+  <a href="https://linzhanmou.com/unimate/resources/unimate.pdf"><img alt="Paper" src="https://img.shields.io/badge/Paper-BF40FF?style=for-the-badge&logo=googledocs&logoColor=white"></a>
+  <a href="https://linzhanmou.com/unimate/interactive.html"><img alt="Interactive Demo" src="https://img.shields.io/badge/Interactive_Demo-0EA5E9?style=for-the-badge&logo=threedotjs&logoColor=white"></a>
   <img alt="Venue" src="https://img.shields.io/badge/SIGGRAPH_Asia-2026-1E1B4B?style=for-the-badge">
 </p>
 
