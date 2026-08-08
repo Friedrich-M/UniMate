@@ -21,6 +21,10 @@
 
 <p align="center">Princeton · UC Berkeley · MIT · NTU</p>
 
+<div align="center">
+    <img src="assets/teaser.png" alt="UniMate teaser" width="100%">
+</div>
+
 <!--
 <div align="center">
 
