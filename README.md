@@ -38,11 +38,12 @@ https://github.com/user-attachments/assets/a4efca07-8673-4ddf-8057-b8be7b008265
 ## 📜 News
 
 - **[TODO]** Training code and the UniML3D dataset will be released in this repository around August 2026.
+- **[2026-08-01]** Our [Interactive Demo](https://linzhanmou.com/unimate/interactive.html) is live — browse our animation results in 3D. 🎮
 - **[2026-07-18]** UniMate is accepted to SIGGRAPH Asia 2026! 🎉
 
 ## 🖼️ Inference
 
-Given a rigged 3D asset and a text prompt, UniMate generates articulated motion for arbitrary skeletons in a single forward pass — with no per-skeleton retraining and no test-time optimization.
+Given a rigged 3D asset and a text prompt, UniMate generates articulated motion for arbitrary skeletons in real time — with no per-skeleton retraining and no test-time optimization.
 
 <div align="center">
     <img src="assets/qualitative.png" alt="Qualitative results" width="100%">
