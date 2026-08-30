@@ -1,0 +1,95 @@
+# ---------- Not yet open-sourced ----------
+# Only the data-processing pipeline (data_process/) is public at this stage;
+# the training / inference code lives in the private motion-gen repo and will
+# be released here later. Patterns are root-anchored on purpose.
+/src/
+/configs/
+/scripts/
+/docs/
+/CLAUDE.md
+/reference/
+
+# ---------- Data / experiments (root-level only) ----------
+/dataset/
+/baselines/
+/outputs/
+/output/
+/logs/
+/*debug/
+/animation_debugs/
+wandb/
+runs/
+mlruns/
+lightning_logs/
+tensorboard/
+tb_logs/
+
+# ---------- ML artifacts ----------
+*.ckpt
+*.pt
+*.pth
+*.safetensors
+*.onnx
+
+# ---------- Python ----------
+__pycache__/
+*.py[cod]
+*.so
+.ipynb_checkpoints/
+*.egg-info/
+dist/
+build/
+*.egg
+
+# ---------- Virtual environments ----------
+.venv/
+venv/
+env/
+ENV/
+.conda/
+
+# ---------- Caches / coverage ----------
+.cache/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.dmypy.json
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+.tox/
+
+# ---------- SLURM / cluster ----------
+# Cluster-specific launchers — not part of the public pipeline.
+/data_process/scripts/slurm/
+slurm-*.out
+slurm-*.err
+*.slurm.log
+core
+core.*
+
+# ---------- Editor / IDE ----------
+.claude/
+.vscode/
+.idea/
+*.iml
+.cursor/
+.history/
+
+# ---------- OS ----------
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# ---------- Logs / temp ----------
+*.log
+*.tmp
+*.temp
+*.bak
+*.old
+*.swp
+*.swo
+*~
+.env
+.env.local

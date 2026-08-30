@@ -1,0 +1,71 @@
+# UniMate unified environment — one env for everything: data processing,
+# rendering, training, inference and evaluation (Python 3.10, CUDA 12.4).
+#
+#   conda create -n unimate python=3.10 -y
+#   conda activate unimate
+#   pip install "setuptools<81"
+#   pip install -r requirements.txt --no-build-isolation
+#
+# The Motion git dependency has a legacy setup.py that imports pkg_resources,
+# which setuptools >= 81 no longer ships. Isolated builds always use the
+# newest setuptools, so the install must run with --no-build-isolation
+# against an env setuptools < 81 — installed by the step above (fresh conda
+# envs ship setuptools >= 81 too); the pin below keeps it from upgrading.
+#
+# Only direct dependencies are listed; everything else (CUDA runtime libs,
+# tokenizers, HTTP stack, ...) is resolved transitively by pip.
+
+# PyTorch cu124 wheels (torch / torchvision "+cu124" pins below)
+--extra-index-url https://download.pytorch.org/whl/cu124
+# Blender official wheel index — PyPI no longer hosts cp310 bpy wheels
+--extra-index-url https://download.blender.org/pypi/
+
+setuptools<81                   # keeps pkg_resources available (Motion build)
+
+# ── Core / training ──────────────────────────────────────────────────────────
+numpy==2.2.6
+torch==2.5.1+cu124
+torchvision==0.20.1+cu124
+torch-geometric==2.7.0          # GCN graph embedding (use_graph_emb)
+torchdiffeq==0.2.5              # ODE/SDE integrators for flow matching
+einops==0.8.2
+accelerate==0.30.1              # multi-GPU + mixed-precision training
+tensorboard==2.20.0             # training logs (SummaryWriter)
+
+# ── Text conditioning (T5 / CLIP / BERT) & VLM captioning ────────────────────
+transformers==4.57.6            # T5/BERT text encoders; >=4.57 required by the local Qwen3-VL captioner
+sentencepiece==0.2.1            # T5 tokenizer backend
+clip @ git+https://github.com/openai/CLIP.git   # CLIP text encoder
+spacy                           # T5 conditioner text normalization
+num2words                       # number → word expansion in text normalization
+openai                          # OpenAI-compatible backends (captioning; DeepSeek/GPT joint annotation)
+google-genai                    # Gemini caption backend ("from google import genai")
+
+# OPTIONAL — fused attention for the local Qwen3-VL captioner. The loader
+# falls back to SDPA when absent, and the prebuilt wheels only exist for a
+# few exact torch/CUDA/Python combinations (a source build takes an hour+),
+# so it is not installed by default:
+#   pip install flash-attn==2.7.4.post1 --no-build-isolation
+
+# ── Motion / animation library (Holden-style Animation / Quaternions /
+#    InverseKinematics; used across data_process/) ───────────────────────────
+Motion @ git+https://github.com/inbar-2344/Motion.git
+
+# ── Blender as a Python module (motion_export/, motion_rendering/,
+#    mesh_animation/). The EEVEE render stage requires the pip module;
+#    export/animate can alternatively run via `blender -b -P`. Pinned to the
+#    last cp310 release, served from download.blender.org (see index above);
+#    4.1+ drops Python 3.10 and 4.2+ changes the EEVEE API. ──────────────────
+bpy==4.0.0
+
+# ── Visualization / imaging ──────────────────────────────────────────────────
+matplotlib==3.10.8
+imageio==2.37.3
+imageio-ffmpeg==0.6.0           # mp4 encoding backend for imageio
+pillow==12.2.0
+
+# ── CLI / logging ────────────────────────────────────────────────────────────
+tyro==1.0.12                    # config + CLI overrides
+rich==14.3.3
+loguru
+tqdm==4.67.3
