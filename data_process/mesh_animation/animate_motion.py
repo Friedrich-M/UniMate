@@ -33,21 +33,15 @@ from loguru import logger
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
-from Animation import Animation, Quaternions, transforms_local  # noqa: E402
+from Animation import Animation, Quaternions  # noqa: E402
 
-from data_process.utils.blender_export import reset_scene  # noqa: E402
-from data_process.utils.blender_rig import (  # noqa: E402
-    EXTRA_BONES_STRATEGIES,
-    compute_bone_keyframes,
-    export_animated_character,
-    get_armature_obj,
-    load_file,
-    rebuild_action_from_data,
-    repair_and_pack_textures,
-    set_scene_timing,
-    sync_armature_bones,
-    update_scene,
+from data_process.mesh_animation.common import (  # noqa: E402
+    drive_and_export,
+    load_character,
+    npz_scalar,
+    parse_blender_argv,
 )
+from data_process.utils.blender_rig import EXTRA_BONES_STRATEGIES  # noqa: E402
 from data_process.utils.skeleton import scale_anim  # noqa: E402
 
 
@@ -65,16 +59,11 @@ COND_PATH_TEMPLATE = 'dataset/features/{dataset_type}/cond.npy'
 # Animation loading
 # ---------------------------------------------------------------------------
 
-def _get_scalar(d, key, default):
-    """Read a scalar from an NpzFile / dict, falling back to *default*."""
-    return float(d[key]) if key in d else default
-
-
 def build_anim_from_npz(anim_path, cond_data):
     """Build ``(anim, rest_anim, tpos_global_rot, raw_anim_data)`` from a
     feature-format NPZ (``global_positions`` + ``local_rotations``)."""
     parents = cond_data['parents']
-    scale_factor = _get_scalar(cond_data, 'scale_factor', 1.0)
+    scale_factor = npz_scalar(cond_data, 'scale_factor', 1.0)
 
     offsets_scaled = cond_data['offsets'] / scale_factor
     tpos_local_rot = cond_data['tpos_local_rotations']
@@ -125,7 +114,7 @@ def build_anim_from_npy(anim_path, cond_data, anim_mode):
         ) from exc
 
     parents = cond_data['parents']
-    scale_factor = _get_scalar(cond_data, 'scale_factor', 1.0)
+    scale_factor = npz_scalar(cond_data, 'scale_factor', 1.0)
     tpos_global_rot = cond_data['tpos_global_rotations']
 
     offsets = cond_data['tpos_offsets']
@@ -263,37 +252,26 @@ def animate_character(char_path, anim_path, cond_path, output_dir,
         extra_bones_strategy: How to handle armature bones not present in
             the animation (see :func:`sync_armature_bones`).
     """
-    assert os.path.exists(char_path), f"Character file not found: {char_path}"
     assert os.path.exists(anim_path), f"Animation file not found: {anim_path}"
     assert os.path.exists(cond_path), f"Condition file not found: {cond_path}"
 
     os.makedirs(output_dir, exist_ok=True)
     anim_base = os.path.splitext(os.path.basename(anim_path))[0]
-    output_path_no_ext = os.path.join(output_dir, anim_base)
 
-    reset_scene()
-    char_armature = get_armature_obj(load_file(char_path))
-    assert char_armature is not None, "No armature found in character file"
-    repair_and_pack_textures(char_path)
+    char_armature = load_character(char_path)
 
     cond_data = load_cond_data(cond_path, anim_path, dataset_type)
-    bone_names = cond_data['joint_names']
     anim, rest_anim, tpos_global_rot, anim_data = load_animation(
         anim_path, cond_data, anim_mode)
 
-    anim_local_mat = transforms_local(anim)          # (nframes, nbones, 4, 4)
-    rest_local_mat = transforms_local(rest_anim)[0]  # (nbones, 4, 4)
-
-    sync_armature_bones(char_armature, bone_names,
-                        extra_bones_strategy=extra_bones_strategy)
-    set_scene_timing(anim_local_mat.shape[0], _get_scalar(anim_data, 'fps', 30))
-
-    keyframes = compute_bone_keyframes(
-        rest_local_mat, anim_local_mat, bone_names, tpos_global_rot)
-    rebuild_action_from_data(char_armature, keyframes)
-    update_scene()
-
-    export_animated_character(output_path_no_ext, formats=('glb', 'fbx'))
+    drive_and_export(
+        char_armature, anim, rest_anim, cond_data['joint_names'],
+        fps=npz_scalar(anim_data, 'fps', 30),
+        output_path_no_ext=os.path.join(output_dir, anim_base),
+        formats=('glb', 'fbx'),
+        extra_bones_strategy=extra_bones_strategy,
+        tpos_global_rot=tpos_global_rot,
+    )
 
 
 def parse_args():
@@ -322,8 +300,7 @@ def parse_args():
                              "the nearest kept ancestor, then remove the bones. "
                              "'remove': delete bones AND mesh vertices dominantly "
                              "weighted to them. 'keep': leave in place, no keyframes.")
-    argv = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else sys.argv[1:]
-    return parser.parse_args(argv)
+    return parse_blender_argv(parser)
 
 
 if __name__ == "__main__":

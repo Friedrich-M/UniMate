@@ -25,31 +25,23 @@ from loguru import logger
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
-from Animation import Animation, Quaternions, transforms_local  # noqa: E402
+from Animation import Animation, Quaternions  # noqa: E402
 
-from data_process.utils.blender_export import reset_scene  # noqa: E402
-from data_process.utils.blender_rig import (  # noqa: E402
-    compute_bone_keyframes,
-    export_animated_character,
-    get_armature_obj,
-    load_file,
-    rebuild_action_from_data,
-    set_scene_timing,
-    sync_armature_bones,
-    update_scene,
+from data_process.mesh_animation.common import (  # noqa: E402
+    clip_output_path,
+    drive_and_export,
+    load_character,
+    npz_scalar,
+    parse_blender_argv,
 )
-
-
-def _npz_get_scalar(npz, key, default):
-    """Read a scalar from an NpzFile, falling back to *default*."""
-    return float(npz[key]) if key in npz else default
+from data_process.utils.blender_rig import EXTRA_BONES_STRATEGIES  # noqa: E402
 
 
 def build_anims_from_export_npz(anim_data):
-    """Build ``(anim, rest_anim)`` Animation objects from an export NPZ."""
+    """Build ``(anim, rest_anim, bone_names)`` from an export-stage NPZ."""
     bone_names = anim_data['names'].tolist()
     nbones = anim_data['anim_local_rot'].shape[1]
-    scale_factor = _npz_get_scalar(anim_data, 'scale_factor', 1.0)
+    scale_factor = npz_scalar(anim_data, 'scale_factor', 1.0)
 
     anim_positions = anim_data['anim_local_pos'] / scale_factor
     rest_positions = anim_data['rest_local_pos'][None] / scale_factor
@@ -86,34 +78,26 @@ def animate_character(char_path, anim_path, output_dir, char_anim_type='glb',
             animation (see :func:`sync_armature_bones`).
         skip_if_exists: Return early when the output file already exists.
     """
-    assert os.path.exists(char_path), f"Character file not found: {char_path}"
     assert os.path.exists(anim_path), f"Animation file not found: {anim_path}"
 
-    anim_base = os.path.splitext(os.path.basename(anim_path))[0]
-    output_path = os.path.join(output_dir, f"{anim_base}.{char_anim_type}")
+    output_path = clip_output_path(anim_path, output_dir, char_anim_type)
     if skip_if_exists and os.path.exists(output_path):
         logger.info(f"Output already exists, skipping: {output_path}")
         return
     os.makedirs(output_dir, exist_ok=True)
 
-    reset_scene()
-    char_armature = get_armature_obj(load_file(char_path))
-    assert char_armature is not None, "No armature found in character file"
+    char_armature = load_character(char_path)
 
     anim_data = np.load(anim_path, allow_pickle=True)
     anim, rest_anim, bone_names = build_anims_from_export_npz(anim_data)
-    anim_local_mat = transforms_local(anim)          # (nframes, nbones, 4, 4)
-    rest_local_mat = transforms_local(rest_anim)[0]  # (nbones, 4, 4)
 
-    sync_armature_bones(char_armature, bone_names,
-                        extra_bones_strategy=extra_bones_strategy)
-    set_scene_timing(anim_local_mat.shape[0], _npz_get_scalar(anim_data, 'fps', 30))
-
-    keyframes = compute_bone_keyframes(rest_local_mat, anim_local_mat, bone_names)
-    rebuild_action_from_data(char_armature, keyframes)
-    update_scene()
-
-    export_animated_character(os.path.splitext(output_path)[0], formats=(char_anim_type,))
+    drive_and_export(
+        char_armature, anim, rest_anim, bone_names,
+        fps=npz_scalar(anim_data, 'fps', 30),
+        output_path_no_ext=os.path.splitext(output_path)[0],
+        formats=(char_anim_type,),
+        extra_bones_strategy=extra_bones_strategy,
+    )
 
 
 def parse_args():
@@ -126,10 +110,9 @@ def parse_args():
     parser.add_argument("--output_dir", type=str, default='outputs/animated')
     parser.add_argument("--char_anim_type", type=str, default='glb', choices=['glb', 'fbx'])
     parser.add_argument("--extra_bones_strategy", type=str, default='merge',
-                        choices=['keep', 'merge', 'remove'],
+                        choices=list(EXTRA_BONES_STRATEGIES),
                         help="What to do with armature bones missing from the animation.")
-    argv = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else sys.argv[1:]
-    return parser.parse_args(argv)
+    return parse_blender_argv(parser)
 
 
 if __name__ == "__main__":

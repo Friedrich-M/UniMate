@@ -26,17 +26,20 @@ import sys
 
 import bpy
 from loguru import logger
-from tqdm import tqdm
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
-from data_process.utils.blender_export import reset_scene  # noqa: E402
+from data_process.mesh_animation.common import (  # noqa: E402
+    clip_output_path,
+    load_character,
+    parse_blender_argv,
+    run_clip_batch,
+)
 from data_process.utils.blender_rig import (  # noqa: E402
     RECONSTRUCTED_ACTION_NAME,
     export_animated_character,
     get_armature_obj,
     load_file,
-    repair_and_pack_textures,
     update_scene,
 )
 
@@ -89,16 +92,13 @@ def animate_character_fbx(char_path, anim_path, output_dir, char_anim_type='glb'
     character (1.0 = every animated bone landed).
     """
     anim_base = os.path.splitext(os.path.basename(anim_path))[0]
-    output_path = os.path.join(output_dir, f"{anim_base}.{char_anim_type}")
+    output_path = clip_output_path(anim_path, output_dir, char_anim_type)
     if skip_if_exists and os.path.exists(output_path):
         logger.info(f"Output already exists, skipping: {output_path}")
         return 1.0
     os.makedirs(output_dir, exist_ok=True)
 
-    reset_scene()
-    char_armature = get_armature_obj(load_file(char_path))
-    assert char_armature is not None, "No armature found in character file"
-    repair_and_pack_textures(char_path)
+    char_armature = load_character(char_path)
 
     anim_objs = load_file(anim_path)
     anim_armature = get_armature_obj(anim_objs)
@@ -119,6 +119,8 @@ def animate_character_fbx(char_path, anim_path, output_dir, char_anim_type='glb'
     for obj in anim_objs:
         bpy.data.objects.remove(obj, do_unlink=True)
 
+    # Unlike the NPZ paths, the clip's own frame range is kept (it need not
+    # start at 0), so the scene timing is set directly here.
     frame_start, frame_end = action.frame_range
     scene = bpy.context.scene
     scene.render.fps = int(fps)
@@ -148,8 +150,7 @@ def parse_args():
                         help="Scene frame rate for the export (Mixamo is 30).")
     parser.add_argument("--overwrite", action='store_true',
                         help="Re-export clips whose output already exists.")
-    argv = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else sys.argv[1:]
-    return parser.parse_args(argv)
+    return parse_blender_argv(parser)
 
 
 if __name__ == "__main__":
@@ -165,20 +166,16 @@ if __name__ == "__main__":
         clips = [args.anim_path]
     logger.info(f"Baking {len(clips)} clip(s) onto {args.char_path}")
 
-    os.makedirs(args.output_dir, exist_ok=True)
-    err_log = os.path.join(args.output_dir, "animate_errors.log")
-
-    for clip in tqdm(clips, desc="Animating character"):
-        try:
-            animate_character_fbx(
-                char_path=args.char_path,
-                anim_path=clip,
-                output_dir=args.output_dir,
-                char_anim_type=args.char_anim_type,
-                fps=args.fps,
-                skip_if_exists=not args.overwrite,
-            )
-        except Exception as e:  # noqa: BLE001 — keep the batch going
-            logger.error(f"Error processing {os.path.basename(clip)}: {e}")
-            with open(err_log, "a") as f:
-                f.write(f"{os.path.basename(clip)}: {e}\n")
+    run_clip_batch(
+        clips,
+        lambda clip: animate_character_fbx(
+            char_path=args.char_path,
+            anim_path=clip,
+            output_dir=args.output_dir,
+            char_anim_type=args.char_anim_type,
+            fps=args.fps,
+            skip_if_exists=not args.overwrite,
+        ),
+        output_dir=args.output_dir,
+        desc="Animating character",
+    )

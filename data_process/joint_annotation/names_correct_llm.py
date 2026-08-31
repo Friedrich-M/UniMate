@@ -27,6 +27,7 @@ Usage:
 import argparse
 import json
 import os
+import re
 import shutil
 import sys
 import time
@@ -43,6 +44,7 @@ from data_process.joint_annotation.names_clean_llm import (  # noqa: E402
     parse_response,
     rule_based_clean,
 )
+from data_process.joint_annotation.vocab import is_canonical_label  # noqa: E402
 from data_process.joint_annotation.llm import (  # noqa: E402
     FatalLLMError,
     LLMClient,
@@ -63,7 +65,8 @@ from data_process.joint_annotation.llm import (  # noqa: E402
 
 CORRECTION_PREAMBLE = (
     "=========================================================================\n"
-    "CHECK & CORRECT MODE — INPUT/OUTPUT SHAPE OVERRIDES THE ABOVE.\n"
+    "CHECK & CORRECT MODE — INPUT SHAPE OVERRIDES THE ABOVE; OUTPUT SHAPE "
+    "IS UNCHANGED.\n"
     "=========================================================================\n"
     "INPUT change: instead of a plain JSON array of raw names you receive a "
     "JSON array of objects, one per joint:\n"
@@ -74,23 +77,36 @@ CORRECTION_PREAMBLE = (
     "PROCESS EACH JOINT IN TWO STEPS.\n\n"
     "STEP 1 — VALIDATE the current label against ALL cleaning rules above. "
     "The label is VALID only if every check below passes:\n"
-    "  (a) It appears verbatim in the CANONICAL VOCABULARY (exact term, "
-    "Title Case, single spaces).\n"
+    "  (a) Its BASE PART appears in the CANONICAL VOCABULARY (exact term, "
+    "Title Case, single spaces). The base part is the label minus any "
+    "'Left '/'Right ' side prefix, minus any Front/Back/Middle/Rear/Inner/"
+    "Outer/Upper/Lower qualifier, minus a trailing ' End' — composed "
+    "labels like 'Left Thigh', 'Right Front Shoulder', 'Leg End', "
+    "'Inner Toe' are valid. EXCEPTION: a raw name that is ONLY digits "
+    "(optionally with a leading underscore) keeps its numeric passthrough "
+    "label unchanged ('_00' -> '_00') — rule 8.\n"
     "  (b) It contains NO digits, underscores, dots, or Blender '.NNN' "
-    "counters — rule 1.\n"
+    "counters — rule 1 — except the rule-8 numeric passthrough in (a).\n"
     "  (c) It carries NO leftover namespace (mixamorig:, Mutant:, Sif:, ...) "
     "or rig/Maya prefix/suffix (Bip01_, BN_, NPC_, jt_, DEF-, _jnt, _C, "
     "...) — rules 2-4.\n"
-    "  (d) If the raw name encodes a side (L_/R_, Lt_/Rt_, Left<Word>, "
-    "'Bip001 L/R ', trailing L/R on Japanese roots, F_/B_ for quadrupeds), "
-    "the label starts with 'Left '/'Right ' (and includes the Front/Back "
-    "marker between side and part when applicable) — rule 5.\n"
+    "  (d) Sides agree with the raw name — rule 5. If the raw encodes a "
+    "side (L_/R_, Lt_/Rt_, Left<Word>, 'Bip001 L/R ', trailing L/R on "
+    "Japanese roots, F_/B_ for quadrupeds), the label starts with "
+    "'Left '/'Right ' (with the Front/Back marker between side and part "
+    "when applicable); if the raw encodes NO side, the label must NOT "
+    "start with one. A trailing .L/.R/_L/_R token OVERRIDES a stale "
+    "leading side word ('mixamorig:LeftShoulder.R' -> 'Right Shoulder').\n"
     "  (e) If the raw name clearly encodes a recognisable body part, the "
-    "label is NOT the 'Bone'/'Appendage' fallback — rules 6-9.\n"
-    "  (f) Finger roots, mixamo chain bones (UpLeg/Leg/Foot → Thigh/Shin/"
-    "Foot), 3ds Max Biped finger codes (Finger0*=Thumb, 1*=Index, ...), "
-    "Japanese roots, and 'Hair*/Ponytail*/Cape*/Skirt*' → 'Appendage' are "
-    "all resolved correctly — rules 6-7.\n\n"
+    "label is NOT the 'Bone' placeholder — rules 6-9 ('Appendage' is "
+    "correct only for humanoid accessory chains, rule 7).\n"
+    "  (f) Convention-dependent names are resolved correctly: finger roots "
+    "and mixamo chain bones (UpLeg/Leg/Foot -> Thigh/Shin/Foot) — rule 6; "
+    "3ds Max Biped 0-based finger codes (Finger0*=Thumb, 1*=Index, ...) — "
+    "rule 6b; 1-based mocap segmented fingers (Finger1Metacarpal=Thumb, "
+    "..., segment words dropped) — rule 6c; animal 'Hair*/Mane*' -> 'Mane' "
+    "but humanoid accessories 'Ponytail*/Cape*/Cloth*/Skirt*' -> "
+    "'Appendage' — rule 7; Japanese roots — rule 9.\n\n"
     "STEP 2 — DECIDE:\n"
     "  - If VALID on every check in Step 1: OUTPUT THE CURRENT LABEL "
     "VERBATIM (skip — do not rewrite).\n"
@@ -124,29 +140,94 @@ CORRECTION_PREAMBLE = (
     "  raw='Hair_03',               current='Hair'             -> 'Mane'              (INVALID: animal Hair->Mane)\n"
     "  raw='Reins_02',              current='Reins'            -> 'Reins'             (VALID: equipment label)\n"
     "  raw='LegTip_R',              current='Right Leg Tip'    -> 'Right Leg End'     (INVALID: Tip not canonical)\n"
+    "  raw='_00',                   current='_00'              -> '_00'               (VALID: numeric passthrough)\n"
+    "  raw='mixamorig:LeftShoulder.R',\n"
+    "       current='Left Shoulder'                            -> 'Right Shoulder'    (INVALID: .R overrides stale prefix)\n"
+    "  raw='Thigh_03',              current='Left Thigh'       -> 'Thigh'             (INVALID: raw encodes no side)\n"
 )
 
 CORRECTION_SYSTEM_PROMPT = SYSTEM_PROMPT + "\n\n" + CORRECTION_PREAMBLE
 
 
-def build_correction_prompt(rig_id, raw_names, current_labels, correction=None):
-    # type: (str, List[str], List[str], Optional[str]) -> str
+def build_correction_prompt(rig_id, raw_names, current_labels, correction=None,
+                            chunk_start=0, rig_raw_names=None):
+    # type: (str, List[str], List[str], Optional[str], int, Optional[List[str]]) -> str
+    """Build the user prompt for one chunk of a rig.
+
+    When ``rig_raw_names`` (the FULL rig's raw list) is longer than this
+    chunk, the prompt says so and includes it as read-only context —
+    chain-dependent decisions (mixamo mid-bone 'Leg', 6b/6c finger
+    conventions) need the neighbours a chunk boundary would otherwise
+    hide, and 'Joint count: 16' on an 80-joint rig would mislead.
+    """
     pairs = [{"raw": raw, "current": current}
              for raw, current in zip(raw_names, current_labels)]
+    header = ["Rig identifier: {}".format(rig_id)]
+    if rig_raw_names is not None and len(rig_raw_names) > len(raw_names):
+        header.append("Rig joint count: {}".format(len(rig_raw_names)))
+        header.append(
+            "This request covers joints {}..{} (0-based) — a consecutive "
+            "slice of the rig, not the whole rig.".format(
+                chunk_start, chunk_start + len(raw_names) - 1))
+        header.append(
+            "Full rig raw joint list (READ-ONLY context for chain/side "
+            "decisions; do NOT emit labels for it):\n{}".format(
+                json.dumps(rig_raw_names, ensure_ascii=False)))
+    else:
+        header.append("Joint count: {}".format(len(raw_names)))
     prompt = (
-        "Rig identifier: {rig}\n"
-        "Joint count: {n}\n\n"
+        "{header}\n\n"
         "Joints (JSON array of {{raw, current}} objects, order matters):\n"
         "{pairs}\n\n"
         "For each joint: validate the 'current' label against the cleaning "
         "rules. If VALID, output it verbatim; if INVALID, output a corrected "
         "canonical label. Return a FLAT JSON array of EXACTLY {n} STRINGS, "
         "same order as the input. Do NOT output objects; strings only."
-    ).format(rig=rig_id, n=len(raw_names),
+    ).format(header="\n".join(header), n=len(raw_names),
              pairs=json.dumps(pairs, ensure_ascii=False, indent=2))
     if correction:
         prompt += "\n\nIMPORTANT: " + correction
     return prompt
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Vocabulary check on LLM output (warn-only)
+# ─────────────────────────────────────────────────────────────────────────────
+
+_SIDE_RE = re.compile(r'^(Left|Right)\s+')
+_QUALIFIER_RE = re.compile(
+    r'^(Front|Back|Middle|Rear|Hind|Inner|Outer|Upper|Lower)\s+')
+
+
+def _is_vocab_label(label):
+    # type: (str) -> bool
+    """``vocab.is_canonical_label`` extended over composed qualifier forms
+    the cleaners emit ('Right Front Shoulder', 'Back Hip') whose bare part
+    is not itself a vocabulary value."""
+    if is_canonical_label(label):
+        return True
+    base = _SIDE_RE.sub('', label)
+    base = re.sub(r'\s+End$', '', base)
+    stripped = _QUALIFIER_RE.sub('', base)
+    return stripped != base and is_canonical_label(stripped)
+
+
+def _warn_non_canonical(rig_id, chunk_tag, chunk_raw, labels):
+    # type: (str, str, List[str], List[str]) -> None
+    """Warn-only guard: flag LLM outputs outside the canonical vocabulary.
+
+    Deliberately not a hard retry — ``canonical_parts`` under-covers a few
+    legitimate composed labels, and a false reject would burn retries on a
+    correct answer. The warning makes vocabulary drift visible in the log
+    before it lands in clean_joint_names.json."""
+    bad = [(raw, lbl) for raw, lbl in zip(chunk_raw, labels)
+           if not _is_vocab_label(lbl)]
+    if bad:
+        shown = ", ".join("{!r}->{!r}".format(r, l) for r, l in bad[:5])
+        logger.warning("[{}{}] {} label(s) outside the canonical vocabulary "
+                       "(kept as-is): {}{}".format(
+                           rig_id, chunk_tag, len(bad), shown,
+                           ", ..." if len(bad) > 5 else ""))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -161,7 +242,8 @@ def build_correction_prompt(rig_id, raw_names, current_labels, correction=None):
 # already-corrected chunks and leaves the rest as rule-based.
 
 def _run_chunk(rig_id, chunk_raw, chunk_current, client, system_prompt,
-               max_tokens, max_retries, chunk_tag=""):
+               max_tokens, max_retries, chunk_tag="", chunk_start=0,
+               rig_raw_names=None):
     # type: (...) -> Optional[List[str]]
     """Retry loop for a single chunk. Returns the parsed list on success, or
     ``None`` after exhausting retries. Lets ``RigTimeout`` propagate so the
@@ -171,9 +253,12 @@ def _run_chunk(rig_id, chunk_raw, chunk_current, client, system_prompt,
     for attempt in range(1, max_retries + 1):
         try:
             user_prompt = build_correction_prompt(
-                rig_id, chunk_raw, chunk_current, correction=correction)
+                rig_id, chunk_raw, chunk_current, correction=correction,
+                chunk_start=chunk_start, rig_raw_names=rig_raw_names)
             raw_text = client.generate(system_prompt, user_prompt, max_tokens)
-            return parse_response(raw_text, len(chunk_raw))
+            parsed = parse_response(raw_text, len(chunk_raw))
+            _warn_non_canonical(rig_id, chunk_tag, chunk_raw, parsed)
+            return parsed
         except (RigTimeout, FatalLLMError):
             raise
         except Exception as err:  # noqa: BLE001 — retry on any backend/parse error
@@ -201,8 +286,10 @@ def correct_rig(rig_id, raw_names, current_labels, client,
 
     Rigs longer than ``chunk_size`` are split into consecutive chunks; each
     chunk is an independent LLM call with its own retries. ``timeout_seconds``
-    is the total SIGALRM budget for the whole rig; successfully-corrected
-    chunks stay corrected even if a later chunk times out.
+    is the PER-CHUNK share of the rig's SIGALRM budget (total = it times the
+    chunk count — a flat per-rig budget starves long rigs, whose later
+    chunks would never run); successfully-corrected chunks stay corrected
+    even if a later chunk times out.
     """
     if not raw_names:
         return [], False
@@ -214,7 +301,8 @@ def correct_rig(rig_id, raw_names, current_labels, client,
     failed_chunks = 0
     timed_out = False
 
-    prev_handler = install_rig_alarm(timeout_seconds)
+    budget = timeout_seconds * n_chunks if timeout_seconds else 0
+    prev_handler = install_rig_alarm(budget)
     try:
         for i in range(n_chunks):
             start = i * chunk_size
@@ -223,7 +311,8 @@ def correct_rig(rig_id, raw_names, current_labels, client,
                          if n_chunks > 1 else "")
             chunk_out = _run_chunk(
                 rig_id, raw_names[start:end], current_labels[start:end],
-                client, system_prompt, max_tokens, max_retries, chunk_tag=chunk_tag)
+                client, system_prompt, max_tokens, max_retries,
+                chunk_tag=chunk_tag, chunk_start=start, rig_raw_names=raw_names)
             if chunk_out is not None:
                 result[start:end] = chunk_out
             else:
@@ -235,7 +324,7 @@ def correct_rig(rig_id, raw_names, current_labels, client,
 
     if timed_out:
         logger.warning("[{}] exceeded {}s budget; keeping current labels for "
-                       "unfinished chunks".format(rig_id, timeout_seconds))
+                       "unfinished chunks".format(rig_id, budget))
     elif failed_chunks:
         logger.warning("[{}] {}/{} chunks still failed; keeping current labels "
                        "for those".format(rig_id, failed_chunks, n_chunks))
@@ -329,9 +418,14 @@ def correct_all(raw_path, cleaned_path, client, system_prompt=CORRECTION_SYSTEM_
         save_json(cleaned_data, cleaned_path)
 
     if still_failed:
-        append_id_list(still_failed_path, still_failed)
-        logger.info("{} rigs still failed; appended to {}".format(
-            len(still_failed), still_failed_path))
+        # Dedup against earlier runs (same convention as face_correct_llm).
+        known = (set(read_id_list(still_failed_path))
+                 if os.path.exists(still_failed_path) else set())
+        new_ids = [rig_id for rig_id in still_failed if rig_id not in known]
+        if new_ids:
+            append_id_list(still_failed_path, new_ids)
+        logger.info("{} rigs still failed ({} newly recorded) -> {}".format(
+            len(still_failed), len(new_ids), still_failed_path))
 
     logger.info("Done. Corrected {}/{} rigs (still failed: {}).".format(
         corrected_count, len(target_ids), len(still_failed)))
@@ -352,7 +446,8 @@ def main():
                         help="Append rig ids the LLM still couldn't fix (default: "
                              "sibling 'still_failed_clean_names.txt').")
     parser.add_argument("--rig_timeout", type=int, default=15,
-                        help="Per-rig wall-time budget in seconds (SIGALRM). 0 disables.")
+                        help="Per-CHUNK wall-time budget in seconds (SIGALRM; a rig's "
+                             "total budget is this times its chunk count). 0 disables.")
     parser.add_argument("--chunk_size", type=int, default=16,
                         help="Joints per LLM call. Smaller chunks avoid length drift on "
                              "long arrays; larger chunks save API calls.")

@@ -289,10 +289,14 @@ def build_user_prompt(rig_id, candidates, rule_hint=None, correction=None):
             json.dumps(rule_hint, ensure_ascii=False, indent=2),
             "",
         ])
-    sections.append(
-        "Apply rules A -> B -> C and return the JSON object only. If the "
-        "hint already satisfies A/B/C, return it verbatim; otherwise override."
-    )
+        sections.append(
+            "Apply rules A -> B -> C and return the JSON object only. If the "
+            "hint already satisfies A/B/C, return it verbatim; otherwise override."
+        )
+    else:
+        sections.append(
+            "Apply rules A -> B -> C and return the JSON object only."
+        )
     prompt = "\n".join(sections)
     if correction:
         prompt += "\n\nIMPORTANT: " + correction
@@ -436,7 +440,7 @@ def parse_response(text, raw_names, clean_names):
 
 def resolve_rig(rig_id, raw_names, clean_names, client, system_prompt=SYSTEM_PROMPT,
                 max_tokens=512, max_retries=MAX_RETRIES, timeout_seconds=15,
-                fallback_on_error=True):
+                fallback_on_error=True, include_hint=True):
     # type: (...) -> Tuple[Dict, bool]
     """Pick the face-direction joint pair for one rig.
 
@@ -445,6 +449,11 @@ def resolve_rig(rig_id, raw_names, clean_names, client, system_prompt=SYSTEM_PRO
     call. On exhausted retries or timeout the rule-based pick is returned
     (or ``RuntimeError`` is raised when ``fallback_on_error`` is False and
     no timeout occurred).
+
+    ``include_hint=False`` omits the rule-based hint from the prompt (it is
+    still computed for the fallback path). The correction pass uses this:
+    re-showing the very hint that already produced a wrong/empty entry
+    anchors the model on it.
     """
     if not raw_names:
         return empty_entry(), False
@@ -476,7 +485,8 @@ def resolve_rig(rig_id, raw_names, clean_names, client, system_prompt=SYSTEM_PRO
             try:
                 raw_text = client.generate(
                     system_prompt,
-                    build_user_prompt(rig_id, candidates, rule_hint=rule_hint,
+                    build_user_prompt(rig_id, candidates,
+                                      rule_hint=rule_hint if include_hint else None,
                                       correction=correction),
                     max_tokens)
                 return parse_response(raw_text, raw_names, clean_names), False

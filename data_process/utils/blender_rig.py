@@ -635,14 +635,20 @@ def export_animated_character(output_path_no_ext, formats=('glb',)):
         export_selected_to_file(f"{output_path_no_ext}.{fmt}", fmt)
 
 
-def export_selected_to_file(filepath, char_anim_type='glb'):
-    """Export currently-selected scene objects to GLB or FBX."""
+def export_selected_to_file(filepath, char_anim_type='glb', custom_props=False):
+    """Export currently-selected scene objects to GLB or FBX.
+
+    ``custom_props`` also exports object-level custom properties (glTF
+    extras / FBX user properties) — used by ``preprocess_char`` to carry the
+    canonical joint order inside the asset.
+    """
     if char_anim_type == 'glb':
         bpy.ops.export_scene.gltf(
             filepath=filepath,
             check_existing=False,
             use_selection=True,
             export_format='GLB',
+            export_extras=custom_props,
             # Export the action's own F-curves rather than resampling every
             # object: sampling also bakes the armature *object's* static
             # transform into a stray second glTF animation.
@@ -665,6 +671,7 @@ def export_selected_to_file(filepath, char_anim_type='glb'):
             bake_anim=True,
             path_mode="COPY",
             embed_textures=True,
+            use_custom_props=custom_props,
         )
     else:
         raise RuntimeError(f"Invalid char_anim_type: {char_anim_type}")

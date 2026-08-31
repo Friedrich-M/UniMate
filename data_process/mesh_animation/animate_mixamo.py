@@ -19,9 +19,12 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
 from loguru import logger  # noqa: E402
-from tqdm import tqdm  # noqa: E402
 
 from data_process.mesh_animation.animate_npz import animate_character  # noqa: E402
+from data_process.mesh_animation.common import (  # noqa: E402
+    parse_blender_argv,
+    run_clip_batch,
+)
 
 
 def parse_args():
@@ -35,8 +38,9 @@ def parse_args():
                         help="Output directory for animated GLB/FBX files.")
     parser.add_argument("--char_anim_type", type=str, default='glb', choices=['glb', 'fbx'],
                         help="Export format for the animated character.")
-    argv = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else sys.argv[1:]
-    return parser.parse_args(argv)
+    parser.add_argument("--overwrite", action='store_true',
+                        help="Re-export clips whose output already exists.")
+    return parse_blender_argv(parser)
 
 
 if __name__ == "__main__":
@@ -44,23 +48,19 @@ if __name__ == "__main__":
     assert os.path.exists(args.char_path), f"Character file not found: {args.char_path}"
     assert os.path.isdir(args.npz_dir), f"NPZ directory not found: {args.npz_dir}"
 
-    os.makedirs(args.output_dir, exist_ok=True)
-    err_log = os.path.join(args.output_dir, "animate_errors.log")
-
-    npz_files = sorted(f for f in os.listdir(args.npz_dir) if f.endswith(".npz"))
+    npz_files = sorted(os.path.join(args.npz_dir, f)
+                       for f in os.listdir(args.npz_dir) if f.endswith(".npz"))
     logger.info(f"Found {len(npz_files)} NPZ files in {args.npz_dir}")
 
-    for npz_file in tqdm(npz_files, desc="Animating meshes"):
-        npz_path = os.path.join(args.npz_dir, npz_file)
-        try:
-            animate_character(
-                char_path=args.char_path,
-                anim_path=npz_path,
-                output_dir=args.output_dir,
-                char_anim_type=args.char_anim_type,
-                skip_if_exists=True,
-            )
-        except Exception as e:  # noqa: BLE001 — keep the batch going
-            logger.error(f"Error processing {npz_file}: {e}")
-            with open(err_log, "a") as f:
-                f.write(f"{npz_file}: {e}\n")
+    run_clip_batch(
+        npz_files,
+        lambda npz_path: animate_character(
+            char_path=args.char_path,
+            anim_path=npz_path,
+            output_dir=args.output_dir,
+            char_anim_type=args.char_anim_type,
+            skip_if_exists=not args.overwrite,
+        ),
+        output_dir=args.output_dir,
+        desc="Animating meshes",
+    )
