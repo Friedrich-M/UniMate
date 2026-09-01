@@ -6,11 +6,17 @@
 #   bash data_process/scripts/run_download.sh mixamo      # animations + rigged characters
 #   bash data_process/scripts/run_download.sh objaverse   # rigged + animated GLBs
 #   bash data_process/scripts/run_download.sh objaverse --include 'glb/*'   # skip metadata
+#   bash data_process/scripts/run_download.sh objaverse_renders            # renders + T-poses
 #
 # Sources:
-#   mixamo     https://huggingface.co/datasets/Linzhan/Mixamo-Animations-Characters
-#   objaverse  https://huggingface.co/datasets/Linzhan/Objaverse-XL-Rigged-Animated
-#   truebones  https://huggingface.co/datasets/Linzhan/Truebones-ZOO-Annotations
+#   mixamo             https://huggingface.co/datasets/Linzhan/Mixamo-Animations-Characters
+#   objaverse          https://huggingface.co/datasets/Linzhan/Objaverse-XL-Rigged-Animated
+#   objaverse_renders  https://huggingface.co/datasets/Linzhan/Objaverse-XL-Rigged-Animated-Renders
+#   truebones          https://huggingface.co/datasets/Linzhan/Truebones-ZOO-Annotations
+#
+# `objaverse_renders` is a download-only companion repo (four-view clip MP4s and
+# per-asset T-pose grids, ~6 GB). It is not a pipeline dataset name — the render
+# stages write into it through the dataset/render/ symlinks.
 #
 # The truebones repo carries annotations only (prompts, per-clip metadata,
 # T-pose renders, build scripts) — the Truebones ZOO animal pack itself is a
@@ -31,6 +37,16 @@ source "$(dirname "${BASH_SOURCE[0]}")/_common.sh"
 handle_help "$@"
 DATASET=${1:-}
 [[ -n "$DATASET" ]] || { print_usage; exit 0; }
+# Download-only companion repo: not a pipeline dataset name, so it skips
+# require_dataset (no stage takes "objaverse_renders" as its dataset argument).
+if [[ "$DATASET" == "objaverse_renders" ]]; then
+    shift
+    REPO=Linzhan/Objaverse-XL-Rigged-Animated-Renders
+    RAW_DIR=${RAW_DIR:-dataset/raw/objaverse_renders}
+    echo "Downloading $REPO -> $RAW_DIR"
+    exec hf download "$REPO" --type dataset --local-dir "$RAW_DIR" "$@"
+fi
+
 require_dataset "$DATASET"
 shift
 

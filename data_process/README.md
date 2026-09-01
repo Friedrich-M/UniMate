@@ -123,6 +123,13 @@ dataset/features/<dataset>/                 stage-4 training clips + cond.npy
 
 `<dataset>` is one of `truebones`, `mixamo`, `objaverse`.
 
+Both `dataset/render/` paths are symlinks into the dataset's own Hub mirror, so renders sit
+beside the assets they came from and upload with them — `truebones` →
+`raw/truebones/{animation_render,species_tpose}`, `mixamo` →
+`raw/mixamo/{animation_motion_render,character_tpose}`, `objaverse` →
+`raw/objaverse_renders/{glb_render,tpose}`. Objaverse keeps its renders in a separate repo
+because there are 10,355 clip folders.
+
 ## Getting the Raw Data
 
 The source assets are hosted on the Hugging Face Hub and download straight into the layout above:
@@ -131,6 +138,7 @@ The source assets are hosted on the Hugging Face Hub and download straight into 
 bash data_process/scripts/run_download.sh mixamo      # → dataset/raw/mixamo/{animation_motion,character_refined,...}
 bash data_process/scripts/run_download.sh objaverse   # → dataset/raw/objaverse/glb
 bash data_process/scripts/run_download.sh truebones   # → dataset/raw/truebones (annotations only — see below)
+bash data_process/scripts/run_download.sh objaverse_renders   # → dataset/raw/objaverse_renders (optional, ~6 GB)
 ```
 
 | Dataset | Source |
@@ -138,6 +146,7 @@ bash data_process/scripts/run_download.sh truebones   # → dataset/raw/truebone
 | `mixamo` | [Linzhan/Mixamo-Animations-Characters](https://huggingface.co/datasets/Linzhan/Mixamo-Animations-Characters) |
 | `objaverse` | [Linzhan/Objaverse-XL-Rigged-Animated](https://huggingface.co/datasets/Linzhan/Objaverse-XL-Rigged-Animated) |
 | `truebones` | [Linzhan/Truebones-ZOO-Annotations](https://huggingface.co/datasets/Linzhan/Truebones-ZOO-Annotations) (prompts, metadata, renders, build scripts — no motion files) |
+| `objaverse_renders` | [Linzhan/Objaverse-XL-Rigged-Animated-Renders](https://huggingface.co/datasets/Linzhan/Objaverse-XL-Rigged-Animated-Renders) (four-view clip MP4s + T-pose grids; download-only companion, not needed to run the pipeline) |
 
 The mixamo and truebones repos also carry the stage-2a multi-view renders as per-view MP4 previews plus camera JSONs (`animation_motion_render/`, `animation_render/` — see each repo's README). The per-frame PNGs the caption stage reads are not hosted; stage 2a regenerates them (or extract stills from the MP4s).
 

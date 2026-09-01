@@ -4,8 +4,8 @@ One captioning request is the same everywhere — a system prompt plus an
 interleaved [view header, frame label, image, ...] user turn — but each
 backend speaks a different dialect. This module owns those dialects:
 
-    qwen    — local Qwen3-VL via HuggingFace transformers; PIL images
-              inline, OOM-aware retries that halve the frame count.
+    qwen    — local Qwen3-VL / Qwen3.5 via HuggingFace transformers; PIL
+              images inline, OOM-aware retries that halve the frame count.
     openai  — OpenAI-compatible chat API; base64 ``data:`` image URLs,
               GPT-5 vs GPT-4o parameter differences handled here.
     gemini  — Google Gemini API; raw image bytes as Parts, thinking and
@@ -200,7 +200,7 @@ def generate_qwen(multiview_frames, motion_name, system_prompt,
                   model, processor, max_tokens, max_retries=MAX_RETRIES,
                   hint=None, video_fps=None):
     # type: (Dict[str, List], str, str, object, object, int, int, Optional[str], Optional[Dict[str, float]]) -> str
-    """Generate caption using local Qwen3-VL model.
+    """Generate caption using a local Qwen3-VL / Qwen3.5 model.
 
     ``multiview_frames`` carries base64 PNG/JPEG strings in image mode, or
     PIL frame lists when ``video_fps`` is given — the latter selects the

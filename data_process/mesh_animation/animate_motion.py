@@ -99,18 +99,18 @@ def build_anim_from_npy(anim_path, cond_data, anim_mode):
     legacy ``.npy`` of model motion features.
 
     Decoding model features back into an ``Animation`` requires the
-    training/inference package (``src.utils.motion_utils``), which is
+    training/inference package (``unimate.utils.motion_utils``), which is
     imported lazily here so the NPZ path stays usable without it.
     """
     try:
-        from src.utils.motion_utils import (
-            recover_anytop_anim_from_rot,
-            recover_anytop_joint_pos_from_ric,
+        from unimate.utils.motion_utils import (
+            recover_unimate_anim_from_rot,
+            recover_unimate_joint_pos_from_ric,
         )
     except ImportError as exc:  # pragma: no cover — depends on the model package
         raise RuntimeError(
             "Legacy .npy motion features need the training/inference package "
-            "(src.utils.motion_utils); pass a feature-format .npz instead."
+            "(unimate.utils.motion_utils); pass a feature-format .npz instead."
         ) from exc
 
     parents = cond_data['parents']
@@ -125,12 +125,12 @@ def build_anim_from_npy(anim_path, cond_data, anim_mode):
 
     if anim_mode == 'fk':
         logger.info("Recovering animation using FK mode")
-        anim = recover_anytop_anim_from_rot(anim_data, parents, offsets)
+        anim = recover_unimate_anim_from_rot(anim_data, parents, offsets)
         anim = scale_anim(anim, 1. / scale_factor)
     elif anim_mode == 'ik':
         logger.info("Recovering animation using IK mode")
         from InverseKinematics import animation_from_positions
-        recover_pos_ric = recover_anytop_joint_pos_from_ric(anim_data)
+        recover_pos_ric = recover_unimate_joint_pos_from_ric(anim_data)
         ik_anim, ik_order, _ = animation_from_positions(
             recover_pos_ric, parents, offsets, iterations=150,
         )

@@ -62,7 +62,7 @@ def load_local_model(model_name, device_map="auto", torch_dtype=None):
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     model = AutoModelForCausalLM.from_pretrained(
         model_name,
-        torch_dtype=dtype,
+        dtype=dtype,
         device_map=device_map,
     )
     model.eval()

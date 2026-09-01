@@ -501,7 +501,8 @@ def load_qwen_model(
 
     Args:
         model_name: HuggingFace model ID or local path
-            (e.g., "Qwen/Qwen3-VL-8B-Instruct").
+            (e.g., "Qwen/Qwen3-VL-8B-Instruct", or "Qwen/Qwen3.5-9B" —
+            the qwen3_5 architecture needs transformers>=5).
         device_map: Device placement strategy (default "auto").
         torch_dtype: Override dtype ("float16", "bfloat16", or None for auto).
         min_pixels: Minimum pixels per image (default 200704 = 256*28*28).
@@ -589,6 +590,10 @@ def qwen_generate(model, processor, messages, max_tokens=300,
         Decoded output string (stripped), or ``(text, num_new_tokens)`` when
         ``return_num_tokens`` is set.
     """
+    # Qwen3.5 hybrid models think by default; enable_thinking=False makes the
+    # template render a closed empty <think> block so the model answers
+    # directly. Qwen3-VL templates don't reference the flag, so it is inert
+    # there.
     if videos is None:
         inputs = processor.apply_chat_template(
             messages,
@@ -596,18 +601,32 @@ def qwen_generate(model, processor, messages, max_tokens=300,
             add_generation_prompt=True,
             return_dict=True,
             return_tensors="pt",
+            enable_thinking=False,
         )
     else:
         text = processor.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=True)
-        video_kwargs = {"fps": video_fps} if video_fps else {}
-        try:
-            inputs = processor(text=[text], videos=videos,
-                               return_tensors="pt", **video_kwargs)
-        except TypeError:
-            # Older processors without an fps kwarg.
-            inputs = processor(text=[text], videos=videos,
-                               return_tensors="pt")
+            messages, tokenize=False, add_generation_prompt=True,
+            enable_thinking=False)
+        # Pin the total-pixel-budget resize semantics: transformers v5.22
+        # flips the default to qwen-vl-utils-style per-frame capping, which
+        # would silently change video token counts.
+        video_kwargs = {"cap_pixels_per_frame": False}
+        if video_fps:
+            # Frames are pre-sampled, so sampling must stay off and the true
+            # frame rate rides in as metadata — the processor derives the
+            # prompt timestamps from metadata.fps. A bare ``fps=`` kwarg
+            # instead requests re-sampling against an assumed 24 fps source
+            # (duplicating/dropping frames and skewing timestamps).
+            from transformers.video_utils import VideoMetadata
+            video_kwargs["do_sample_frames"] = False
+            video_kwargs["video_metadata"] = [
+                VideoMetadata(total_num_frames=len(v), fps=f,
+                              duration=len(v) / f,
+                              frames_indices=list(range(len(v))))
+                for v, f in zip(videos, video_fps)
+            ]
+        inputs = processor(text=[text], videos=videos,
+                           return_tensors="pt", **video_kwargs)
     inputs.pop("token_type_ids", None)
     logger.debug("Qwen prompt tokens: {}".format(inputs["input_ids"].shape[-1]))
     inputs = inputs.to(model.device)
@@ -630,6 +649,11 @@ def qwen_generate(model, processor, messages, max_tokens=300,
         generated_ids_trimmed, skip_special_tokens=True,
         clean_up_tokenization_spaces=False,
     )[0].strip()
+    # A thinking model may still emit a <think> block despite the template
+    # flag; keep only the answer after it. An unclosed block means the budget
+    # was spent thinking — the leftover text trips the rejection checks.
+    if "</think>" in text:
+        text = text.split("</think>")[-1].strip()
     if return_num_tokens:
         return text, len(generated_ids_trimmed[0])
     return text
@@ -645,7 +669,7 @@ def add_qwen_model_args(parser):
                         default='Qwen/Qwen3-VL-8B-Instruct',
                         help='HuggingFace model ID or local path '
                              '(e.g., Qwen/Qwen3-VL-8B-Instruct, '
-                             'Qwen/Qwen3-VL-72B-Instruct).')
+                             'Qwen/Qwen3-VL-72B-Instruct, Qwen/Qwen3.5-9B).')
     parser.add_argument('--torch_dtype', type=str, default=None,
                         choices=['float16', 'bfloat16'],
                         help='Override model dtype (default: bfloat16).')

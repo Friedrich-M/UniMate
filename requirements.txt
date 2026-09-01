@@ -29,11 +29,11 @@ torchvision==0.20.1+cu124
 torch-geometric==2.7.0          # GCN graph embedding (use_graph_emb)
 torchdiffeq==0.2.5              # ODE/SDE integrators for flow matching
 einops==0.8.2
-accelerate==0.30.1              # multi-GPU + mixed-precision training
+accelerate==1.14.0              # multi-GPU + mixed-precision training; transformers 5.x needs >=1.1
 tensorboard==2.20.0             # training logs (SummaryWriter)
 
 # ── Text conditioning (T5 / CLIP / BERT) & VLM captioning ────────────────────
-transformers==4.57.6            # T5/BERT text encoders; >=4.57 required by the local Qwen3-VL captioner
+transformers==5.16.1            # T5/BERT text encoders; local Qwen3-VL captioner needs >=4.57, Qwen3.5 (qwen3_5 arch) needs 5.x
 sentencepiece==0.2.1            # T5 tokenizer backend
 clip @ git+https://github.com/openai/CLIP.git   # CLIP text encoder
 spacy                           # T5 conditioner text normalization

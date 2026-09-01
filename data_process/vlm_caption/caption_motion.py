@@ -1,7 +1,7 @@
 """Caption multi-view rendered motion sequences with a Vision-Language Model.
 
 Supports three backends (see :mod:`data_process.vlm_caption.backends`):
-    qwen    — Local Qwen3-VL via HuggingFace transformers (default).
+    qwen    — Local Qwen3-VL / Qwen3.5 via HuggingFace transformers (default).
     openai  — OpenAI-compatible API (GPT-4o, GPT-5, ...).
     gemini  — Google Gemini API.
 
@@ -411,7 +411,8 @@ def parse_args():
     parser.add_argument('--model', type=str,
                         default='Qwen/Qwen3-VL-8B-Instruct',
                         help='Model name. For qwen: HuggingFace model ID '
-                             '(default Qwen/Qwen3-VL-8B-Instruct). For openai: '
+                             '(default Qwen/Qwen3-VL-8B-Instruct; also e.g. '
+                             'Qwen/Qwen3.5-9B). For openai: '
                              'API model (e.g., gpt-5-mini). For gemini: API model '
                              '(e.g., gemini-3-flash-preview).')
 
