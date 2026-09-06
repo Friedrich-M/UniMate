@@ -4,8 +4,8 @@ Complement to the rule-based :mod:`names_clean_rule`: sends raw joint names to a
 LLM and asks it to map each one to a canonical anatomical label from
 :mod:`vocab`. Pure text in / text out — no images needed.
 
-Backends (see :mod:`llm`): local HF causal LM, OpenAI API (default:
-gpt-5-mini), DeepSeek API.
+Backends (see :mod:`llm`): DeepSeek API (default: ``deepseek-v4-flash``),
+OpenAI API, or a local HF causal LM.
 
 Input  : ``joint_names.json`` — ``{rig_id: [raw_joint_name, ...]}`` where
          ``rig_id`` keys may be humans, animals, props, vehicles or any other
@@ -28,9 +28,9 @@ rig or ``--redo_failed`` to redo just the recorded failures.
 
 Usage:
     python -m data_process.joint_annotation.names_clean_llm \\
-        --input <export_dir>/joint_names.json               # OpenAI gpt-5-mini
+        --input <export_dir>/joint_names.json               # DeepSeek v4-flash (default)
     python -m data_process.joint_annotation.names_clean_llm \\
-        --input <export_dir>/joint_names.json --model deepseek-v4-flash
+        --input <export_dir>/joint_names.json --model gpt-5-mini
     python -m data_process.joint_annotation.names_clean_llm \\
         --input <export_dir>/joint_names.json --model Qwen/Qwen3-8B
 """

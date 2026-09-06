@@ -14,6 +14,7 @@ Two families of functions:
     save_skeleton_*    -> write PNG (pose) / MP4 (motion) to disk
 """
 
+import textwrap
 from pathlib import Path
 from typing import List, Optional, Sequence, Tuple
 
@@ -364,6 +365,85 @@ def render_skeleton_tpose(parents: Sequence[int], positions,
     return _capture_rgb(canvas)
 
 
+def render_skeleton_tpose_facing(parents: Sequence[int], positions,
+                                 face_joint_idxs: Optional[Sequence[int]] = None,
+                                 forward=None,
+                                 target_forward=None,
+                                 elev: float = 30,
+                                 azim: float = -60,
+                                 rotate_root: bool = True,
+                                 arrow_scale: float = 0.35,
+                                 title: Optional[str] = None,
+                                 extra_markers=None,
+                                 figsize: Tuple[float, float] = (6, 6),
+                                 dpi: int = 120) -> np.ndarray:
+    """Rest pose with its facing pair highlighted, as an (H, W, 3) uint8 image.
+
+    ``face_joint_idxs`` is ``[r_hip, l_hip]`` (drawn red / blue, joined by a
+    dashed magenta line); ``forward`` is the facing direction those joints
+    imply, drawn as a green arrow from the root, and ``target_forward`` (e.g.
+    +Z after canonicalization) as a grey arrow. Arrows are ``arrow_scale``
+    times the cubic-bound side. ``extra_markers`` is an optional list of
+    ``(joint_indices, color, marker, label)`` tuples drawn on top (with a
+    legend) — e.g. the Head / Tail End joints, to read the facing at a glance.
+    Same camera as :func:`render_skeleton_tpose`, so the image lines up with
+    the export-stage ``tpose/<rig>.png``.
+    """
+    pts = _as_xyz(positions).reshape(-1, 3)
+    pts = _maybe_rotate_y_up(pts, rotate_root)
+    edges = _edges_from_parents(parents)
+    bounds = _cubic_bounds(pts)
+    x_min, x_max, y_min, y_max, z_min, z_max = bounds
+    arrow_len = max(x_max - x_min, y_max - y_min, z_max - z_min) * arrow_scale
+
+    fig, canvas, ax = _new_figure(bounds, elev, azim, figsize=figsize, dpi=dpi)
+    _draw_static_skeleton(ax, pts, parents, edges)
+
+    if face_joint_idxs is not None and len(face_joint_idxs) >= 2 \
+            and min(face_joint_idxs[:2]) >= 0:
+        r, l = int(face_joint_idxs[0]), int(face_joint_idxs[1])
+        for j, color in ((r, 'red'), (l, 'blue')):
+            ax.scatter(pts[j:j + 1, 0], pts[j:j + 1, 1], pts[j:j + 1, 2],
+                       s=90, c=color, edgecolors='black', linewidths=1.0,
+                       depthshade=False, zorder=12)
+        ax.plot([pts[r, 0], pts[l, 0]], [pts[r, 1], pts[l, 1]],
+                [pts[r, 2], pts[l, 2]], color='magenta', linestyle='--',
+                linewidth=1.5, zorder=11)
+
+    root = pts[0]
+    for vec, color, width in ((target_forward, '0.55', 3.0), (forward, 'green', 2.5)):
+        if vec is None:
+            continue
+        d = np.asarray(vec, dtype=np.float32).reshape(3)
+        n = float(np.linalg.norm(d))
+        if n < 1e-8:
+            continue
+        d = _maybe_rotate_y_up(d / n, rotate_root)
+        ax.quiver(root[0], root[1], root[2], d[0], d[1], d[2],
+                  length=arrow_len, normalize=False, color=color,
+                  linewidth=width, arrow_length_ratio=0.25, zorder=13)
+
+    if extra_markers:
+        drawn = False
+        for idxs, color, marker, label in extra_markers:
+            idxs = [int(i) for i in idxs if 0 <= int(i) < len(pts)]
+            if not idxs:
+                continue
+            ax.scatter(pts[idxs, 0], pts[idxs, 1], pts[idxs, 2], s=110, c=color,
+                       marker=marker, edgecolors='black', linewidths=0.8,
+                       depthshade=False, zorder=14, label=label)
+            drawn = True
+        if drawn:
+            handles, labels = ax.get_legend_handles_labels()
+            fig.legend(handles, labels, loc='lower center', ncol=max(1, len(labels)),
+                       fontsize=7, framealpha=0.8, bbox_to_anchor=(0.5, 0.012))
+
+    if title:
+        fig.suptitle(title, fontsize=9, wrap=True, y=0.99)
+        fig.subplots_adjust(top=0.90)
+    return _capture_rgb(canvas)
+
+
 def render_skeleton_tpose_annotated(parents: Sequence[int], positions,
                                     joint_names: Sequence[str],
                                     elev: float = 30,
@@ -554,8 +634,7 @@ def render_skeleton_motion(parents: Sequence[int], positions,
     bounds = _cubic_bounds(pts)
     fig, canvas, ax = _new_figure(bounds, elev, azim, figsize=figsize, dpi=dpi)
     if title:
-        fig.suptitle(title, fontsize=12, fontweight='bold', wrap=True, y=0.98)
-        fig.subplots_adjust(top=0.90)
+        _draw_caption(fig, title, figsize)
 
     joint_colors = np.where(np.asarray(parents) == -1, 'r', 'b')
     segs, lc, sc = _init_motion_artists(ax, edges, pts[0], joint_colors,
@@ -601,8 +680,7 @@ def render_skeleton_motion_spectral(parents: Sequence[int], positions,
     bounds = _cubic_bounds(pts)
     fig, canvas, ax = _new_figure(bounds, elev, azim, figsize=figsize, dpi=dpi)
     if title:
-        fig.suptitle(title, fontsize=12, fontweight='bold', wrap=True, y=0.98)
-        fig.subplots_adjust(top=0.90)
+        _draw_caption(fig, title, figsize)
 
     colors = _spectral_to_rgb(spectral_feats)
     segs, lc, sc = _init_motion_artists(
@@ -696,59 +774,159 @@ def render_skeleton_motion_directed(parents: Sequence[int], positions,
     return np.stack(frames, axis=0)
 
 
-_CHECKER_COLORS = ((0.93, 0.93, 0.93), (0.885, 0.885, 0.885))
+# ============================================================================
+# Ground-plane motion render
+# ============================================================================
+
+# Two checker greys plus the background the floor dissolves into toward the
+# horizon. Cool-tinted and more separated than a hairline pair: the tiles
+# must read as a floor at 640 px without competing with the skeleton.
+_CHECKER_COLORS = np.array([(0.910, 0.917, 0.930),
+                            (0.822, 0.834, 0.860)], dtype=np.float32)
+_GROUND_BG = np.array([1.0, 1.0, 1.0], dtype=np.float32)
+_SHADOW_COLOR = (0.55, 0.57, 0.61)
+_TRAIL_COLOR = (0.95, 0.49, 0.11)
+_BONE_COLOR = (0.27, 0.29, 0.33)
 
 
-def _checker_platform_local(platform_half: float, n_tiles: int, z: float):
-    """A RIGID checker platform in platform-local coordinates.
+def _ground_tiles(ax, cx: float, cy: float, azim: float, view_half: float,
+                  tile: float, z: float,
+                  fade_start: float = 1.0, fade_end: float = 4.5,
+                  fade_subdiv: int = 2):
+    """World-anchored whole checker tiles for the ground under the camera.
 
-    Returns ``(quads, colors)`` for an ``n_tiles`` × ``n_tiles`` board
-    centered on the origin. The pattern is glued to the platform: the whole
-    board is translated rigidly per frame, so nothing about the ground ever
-    changes on screen (world-anchored tiles clipped to a sliding window
-    made the edge tiles boil). Keeping the board small and near the camera
-    also avoids matplotlib's broken projection of far/behind-camera quads.
+    Every tile is drawn complete, so the drawn set only changes by whole
+    tiles entering/leaving as the camera glides — a rigid floor scrolling
+    underfoot, with no edge boiling and no clipped slivers.
+
+    Two things keep the floor from reading as a floating slab. Candidate
+    tiles are culled by projecting their corners to pixels and keeping only
+    those the frame actually shows, so the near floor stays solid into the
+    bottom corners while the drawn set stays small. And the fade runs along
+    the camera's view direction alone, from ``fade_start`` to ``fade_end``
+    (multiples of ``view_half``): the floor dissolves into the background
+    toward the horizon and nowhere else.
+
+    A flat-shaded quad can only carry one colour, so a fade evaluated per
+    tile quantises into tile-sized steps — and against the alternating
+    checker those steps read as hard banding at the horizon. Each tile is
+    therefore split into ``fade_subdiv`` x ``fade_subdiv`` sub-quads that
+    share the tile's checker colour but fade individually, which divides the
+    step size by ``fade_subdiv`` without touching the pattern — the fade then
+    reads as a gradient across each tile rather than as a flat step between
+    tiles. Only tiles inside the ramp are split (see below); 2 buys most of
+    the smoothing at ~1.6x the frame cost, 3 is smoother again at ~2.5x.
+
+    Returns ``(quads (N, 4, 3), colors (N, 3))``.
     """
-    tile = 2.0 * platform_half / n_tiles
-    quads, colors = [], []
-    for i in range(n_tiles):
-        xa = -platform_half + i * tile
-        for j in range(n_tiles):
-            ya = -platform_half + j * tile
-            quads.append([(xa, ya, z), (xa + tile, ya, z),
-                          (xa + tile, ya + tile, z), (xa, ya + tile, z)])
-            colors.append(_CHECKER_COLORS[(i + j) % 2])
-    return np.asarray(quads, dtype=np.float32), colors
+    theta = np.deg2rad(azim)
+    # Horizontal direction the camera looks along (it sits at ``azim``), and
+    # its normal: "deeper into the scene" and "across it".
+    u_hat = np.array([-np.cos(theta), -np.sin(theta)], dtype=np.float32)
+    v_hat = np.array([-u_hat[1], u_hat[0]], dtype=np.float32)
 
+    # Candidate window: the axis-aligned bounds of a ground wedge that
+    # comfortably contains everything the camera can see out to fade_end.
+    near, width, spread = 3.0, 3.8, 1.2
+    far_width = width + spread * fade_end
+    corners = np.array([(-near, -width), (-near, width),
+                        (fade_end, -far_width), (fade_end, far_width)],
+                       dtype=np.float32) * view_half
+    world = (corners[:, :1] * u_hat + corners[:, 1:] * v_hat
+             + np.array([cx, cy], dtype=np.float32))
+    i0 = int(np.floor(world[:, 0].min() / tile))
+    i1 = int(np.floor(world[:, 0].max() / tile))
+    j0 = int(np.floor(world[:, 1].min() / tile))
+    j1 = int(np.floor(world[:, 1].max() / tile))
+    ii, jj = np.meshgrid(np.arange(i0, i1 + 1), np.arange(j0, j1 + 1),
+                         indexing='ij')
+    ii = ii.ravel()
+    jj = jj.ravel()
+    xa = (ii * tile).astype(np.float32)
+    ya = (jj * tile).astype(np.float32)
 
-def _checker_tiles_window(cx: float, cy: float, view_half: float,
-                          tile: float, z: float, margin_tiles: int = 2):
-    """WHOLE world-anchored tiles covering the view window plus a margin.
+    # Coarse cull first, in the wedge's own frame: it drops the ~half of the
+    # index rectangle that lies outside the wedge for the price of two dot
+    # products, so the exact (but pricier) pixel test below runs on far
+    # fewer tiles.
+    dx = xa + tile / 2 - cx
+    dy = ya + tile / 2 - cy
+    du = dx * u_hat[0] + dy * u_hat[1]
+    dv = dx * v_hat[0] + dy * v_hat[1]
+    inside = ((du > -near * view_half - tile) &
+              (du < fade_end * view_half + tile) &
+              (np.abs(dv) < width * view_half
+               + spread * np.maximum(du, 0.0) + tile))
+    ii, jj = ii[inside], jj[inside]
+    xa, ya, du = xa[inside], ya[inside], du[inside]
 
-    Every tile is drawn complete (never clipped), and the drawn set only
-    changes by whole tiles entering/leaving beyond the visible edge — so a
-    sliding camera sees a rigid floor scrolling underfoot with no edge
-    boiling. The margin keeps the set's boundary off screen while staying
-    small enough to avoid matplotlib's broken far/behind-camera projection.
-    """
-    i0 = int(np.floor((cx - view_half) / tile)) - margin_tiles
-    i1 = int(np.floor((cx + view_half) / tile)) + margin_tiles
-    j0 = int(np.floor((cy - view_half) / tile)) - margin_tiles
-    j1 = int(np.floor((cy + view_half) / tile)) + margin_tiles
-    quads, colors = [], []
-    for i in range(i0, i1 + 1):
-        xa = i * tile
-        for j in range(j0, j1 + 1):
-            ya = j * tile
-            quads.append([(xa, ya, z), (xa + tile, ya, z),
-                          (xa + tile, ya + tile, z), (xa, ya + tile, z)])
-            colors.append(_CHECKER_COLORS[(i + j) % 2])
+    zc = np.full_like(xa, z)
+    quads = np.stack([
+        np.stack([xa, ya, zc], axis=1),
+        np.stack([xa + tile, ya, zc], axis=1),
+        np.stack([xa + tile, ya + tile, zc], axis=1),
+        np.stack([xa, ya + tile, zc], axis=1),
+    ], axis=1)
+    # The pixel cull below runs on whole tiles — cheaper, and a sub-quad can
+    # never fall outside its parent.
+
+    # Keep a tile when any corner lands on (or just off) the canvas.
+    flat = quads.reshape(-1, 3)
+    sx, sy, _ = proj3d.proj_transform(flat[:, 0], flat[:, 1], flat[:, 2],
+                                      ax.get_proj())
+    scr = ax.transData.transform(np.column_stack([sx, sy]))
+    scr = scr.reshape(-1, 4, 2)
+    w, h = ax.figure.bbox.size
+    pad = 0.05 * max(w, h)
+    on_screen = ((scr[..., 0] > -pad) & (scr[..., 0] < w + pad) &
+                 (scr[..., 1] > -pad) & (scr[..., 1] < h + pad)).any(axis=1)
+    ii, jj, du = ii[on_screen], jj[on_screen], du[on_screen]
+    quads = quads[on_screen]
+
+    # Sub-divide, but only across the ramp: nearer than fade_start every
+    # sub-quad would come out at f = 0 and beyond fade_end at f = 1, so
+    # splitting there buys nothing and the extra polygons are drawn on every
+    # frame, not just on a floor rebuild. One tile of margin covers the tiles
+    # that straddle either end.
+    n = max(1, int(fade_subdiv))
+    if n > 1:
+        margin = tile / max(view_half, 1e-9)
+        dun = du / max(view_half, 1e-9)
+        in_ramp = (dun > fade_start - margin) & (dun < fade_end + margin)
+        if in_ramp.any():
+            sub = tile / n
+            off = np.arange(n, dtype=np.float32) * sub
+            ox, oy = np.meshgrid(off, off, indexing='ij')
+            ox, oy = ox.ravel(), oy.ravel()             # (n*n,)
+            qr = quads[in_ramp]
+            xs = (qr[:, 0, 0][:, None] + ox[None, :]).ravel()
+            ys = (qr[:, 0, 1][:, None] + oy[None, :]).ravel()
+            zs = np.full_like(xs, z)
+            sub_quads = np.stack([
+                np.stack([xs, ys, zs], axis=1),
+                np.stack([xs + sub, ys, zs], axis=1),
+                np.stack([xs + sub, ys + sub, zs], axis=1),
+                np.stack([xs, ys + sub, zs], axis=1),
+            ], axis=1)
+            dx = xs + sub / 2 - cx
+            dy = ys + sub / 2 - cy
+            quads = np.concatenate([quads[~in_ramp], sub_quads], axis=0)
+            du = np.concatenate([du[~in_ramp],
+                                 dx * u_hat[0] + dy * u_hat[1]])
+            ii = np.concatenate([ii[~in_ramp], np.repeat(ii[in_ramp], n * n)])
+            jj = np.concatenate([jj[~in_ramp], np.repeat(jj[in_ramp], n * n)])
+
+    base = _CHECKER_COLORS[(ii + jj) % 2]
+    du = du / max(view_half, 1e-9)
+    f = np.clip((du - fade_start) / max(fade_end - fade_start, 1e-9), 0.0, 1.0)
+    f = (f * f * (3.0 - 2.0 * f))[:, None]              # smoothstep
+    colors = base * (1.0 - f) + _GROUND_BG * f
     return quads, colors
 
 
 def _smooth_path(path: np.ndarray, window: int) -> np.ndarray:
     """Moving-average smoothing with edge padding; kills gait sway so the
-    follow camera and platform glide instead of bobbing with each step."""
+    follow camera glides instead of bobbing with each step."""
     if window <= 1 or len(path) < 3:
         return path
     kernel = np.ones(window, dtype=np.float32) / window
@@ -758,6 +936,96 @@ def _smooth_path(path: np.ndarray, window: int) -> np.ndarray:
                      for d in range(path.shape[1])], axis=1)
 
 
+# The house sans stack, shared with the dataset-statistics figures: those
+# import SANS_STACK from here for their ``font.sans-serif``, so a caption in a
+# clip preview and a label in clip_frames_distribution.png are the same face by
+# construction and cannot drift apart. Order and contents are the figures'
+# original list, kept verbatim.
+SANS_STACK = ['Helvetica', 'Arial', 'DejaVu Sans', 'Liberation Sans']
+
+
+def _installed_family(preferred):
+    """Keep only the faces this machine actually has, + the bundled fallback.
+
+    Naming a missing family makes matplotlib emit one ``findfont: Font family
+    ... not found`` warning per text draw — tens of thousands of lines over a
+    dataset render — so the stack is resolved once, at import. DejaVu Sans
+    ships with matplotlib itself, so the result is never empty.
+    """
+    try:
+        from matplotlib import font_manager as fm
+        have = {f.name for f in fm.fontManager.ttflist}
+    except Exception:  # noqa: BLE001 — never fail an import over fonts
+        have = set()
+    stack = [f for f in preferred if f in have]
+    if 'DejaVu Sans' not in stack:
+        stack.append('DejaVu Sans')
+    return stack
+
+
+# Caption typography for the rendered clip previews and T-pose cards.
+CAPTION_FONT_FAMILY = _installed_family(SANS_STACK)
+CAPTION_FONT_SIZE = 13.0
+# dist_plot.finish_figure titles at this weight. DejaVu Sans has no semibold
+# face, so matplotlib resolves it to DejaVuSans-Bold.ttf — matching the family
+# is not enough, the weight is what picks the actual font file.
+CAPTION_FONT_WEIGHT = 'semibold'
+CAPTION_COLOR = '#1F2937'          # dist_plot.INK
+# Figure-fraction height one caption line costs the plot area, per point of
+# type. Multiplied by the font size and the line count by _draw_caption.
+_CAPTION_LINE_DROP = 0.0042
+
+
+def _mean_advance_pt(font_pt: float, family=None) -> float:
+    """Mean glyph advance of *family* at *font_pt*, in points.
+
+    Measured from the real face rather than assumed, so the wrap width stays
+    right when the caption font or size changes (DejaVu averages ~0.545 em,
+    Nimbus Sans ~0.50 — hard-coding either mis-wraps the other).
+    """
+    probe = ('abcdefghijklmnopqrstuvwxyz '
+             'ABCDEFGHIJKLMNOPQRSTUVWXYZ etaoinshrdlu')
+    try:
+        from matplotlib.font_manager import FontProperties
+        from matplotlib.textpath import TextPath
+        fp = FontProperties(family=family or CAPTION_FONT_FAMILY, size=font_pt,
+                            weight=CAPTION_FONT_WEIGHT)
+        width = TextPath((0, 0), probe, prop=fp).get_extents().width
+        if width > 0:
+            return float(width) / len(probe)
+    except Exception:  # noqa: BLE001 — fall back rather than fail a render
+        pass
+    return 0.545 * font_pt
+
+
+def _wrap_title(text: str, fig_width_in: float, font_pt: float,
+                family=None, fill: float = 0.92) -> str:
+    """Hard-wrap a caption to the figure width (suptitle's own wrapping is
+    unreliable and long captions ran off both edges).
+
+    ``fill`` is the share of the figure width a full line may occupy.
+    """
+    chars = max(24, int(fig_width_in * 72.0 * fill / _mean_advance_pt(font_pt, family)))
+    return '\n'.join(textwrap.wrap(text, chars)) or text
+
+
+def _draw_caption(fig, text: str, figsize, font_pt: float = CAPTION_FONT_SIZE,
+                  top_base: float = 0.94) -> None:
+    """Draw a wrapped clip caption across the top of *fig* and make room for it.
+
+    Plain label type, not a heading: a caption is there to be read off, not to
+    be the loudest thing in the frame. The plot area gives up height in
+    proportion to the type size and the number of wrapped lines, so a long
+    caption never lands on top of the subject.
+    """
+    wrapped = _wrap_title(text, figsize[0], font_pt, CAPTION_FONT_FAMILY)
+    n_lines = wrapped.count('\n') + 1
+    fig.text(0.5, 0.988, wrapped, ha='center', va='top',
+             color=CAPTION_COLOR, fontsize=font_pt,
+             fontfamily=CAPTION_FONT_FAMILY, fontweight=CAPTION_FONT_WEIGHT)
+    fig.subplots_adjust(top=top_base - _CAPTION_LINE_DROP * font_pt * n_lines)
+
+
 def render_skeleton_motion_ground(parents: Sequence[int], positions,
                                   spectral_feats=None,
                                   elev: float = 20,
@@ -765,17 +1033,29 @@ def render_skeleton_motion_ground(parents: Sequence[int], positions,
                                   rotate_root: bool = True,
                                   follow: bool = True,
                                   title: Optional[str] = None,
-                                  joint_marker_size: float = 14.0,
-                                  bone_linewidth: float = 1.6,
+                                  title_font_size: float = CAPTION_FONT_SIZE,
+                                  joint_marker_size: float = 18.0,
+                                  bone_linewidth: float = 1.9,
+                                  shadow: bool = True,
+                                  trail: bool = True,
+                                  view_margin: float = 1.0,
                                   figsize: Tuple[float, float] = (6, 6),
                                   dpi: int = 120) -> np.ndarray:
-    """Motion render with a checkerboard ground plane and root trajectory;
-    the camera follows the subject.
+    """Motion render on a checkerboard floor, with a camera that follows the
+    subject, a contact shadow and a fading root trail.
 
-    The ground sits at the motion's lowest point, the view window is sized to
-    the subject (not the whole trajectory, so a long walk doesn't shrink the
-    character to a speck), and each frame re-centers the window on the root —
-    the checker tiles scrolling past convey world-space travel. Joints use
+    The floor sits at the motion's lowest point and is world-anchored and
+    unbounded (tiles are rebuilt around the camera each frame and fade out
+    toward the horizon), so travel reads off the tiles scrolling underfoot
+    rather than off a slab edge sweeping past. The view window is sized to
+    the subject, not to the trajectory, so a long walk does not shrink the
+    character to a speck.
+
+    ``shadow`` drops the skeleton straight down onto the floor, which is what
+    makes ground contact (and its absence, in a jump) legible. ``trail``
+    draws the path the root has travelled so far, fading with age. ``title``
+    is drawn as a plain black caption (hard-wrapped to the figure width) in
+    the same label type the annotated T-pose renderer uses. Joints use
     the spectral PCA palette when ``spectral_feats`` is given, else the
     default root-red / joint-blue scheme.
     """
@@ -786,34 +1066,31 @@ def render_skeleton_motion_ground(parents: Sequence[int], positions,
 
     edges = _edges_from_parents(parents)
     ground_z = float(pts[..., 2].min())
-    root_xy = pts[:, 0, :2]                                   # (T, 2)
+    root_xy = pts[:, 0, :2].astype(np.float32)                # (T, 2)
 
     # Window half-extent from the subject's own size, not the trajectory.
     radius_xy = float(np.abs(pts[..., :2] - root_xy[:, None, :]).max())
     height = float(pts[..., 2].max() - ground_z)
-    half = max(radius_xy * 1.08, height * 0.52, 1e-3)
+    # ``view_margin`` > 1 pulls the camera back. The default frames a moving
+    # subject tightly; a still pose is read for its shape, and a rest pose
+    # that spreads its limbs along the ground (or rears a tail overhead)
+    # wants the extra room so nothing touches the frame edge.
+    half = max(radius_xy * 1.05, height * 0.50, 1e-3) * max(view_margin, 1e-3)
 
     # Coordinated motion: the camera GLIDES after the subject (smoothed root
-    # path) while the ground stays fixed in the WORLD — subject, ground and
-    # camera all move together, and world travel reads off the stage sliding
-    # through the frame plus the trail. The ground itself has two forms:
-    #   stage  — modest travel: one rigid bounded platform covering the
-    #            whole trajectory, built once, world-fixed.
-    #   scroll — extreme travel: world-anchored whole-tile floor windowed
-    #            around the camera (a trajectory-sized stage would need far
-    #            too many quads and far-away quads project badly).
+    # path) while the floor stays fixed in the WORLD, so subject, floor and
+    # camera all move together and world travel reads off the tiles sliding
+    # through the frame plus the trail.
     traj_center = 0.5 * (root_xy.max(axis=0) + root_xy.min(axis=0))
     traj_half = float((root_xy.max(axis=0) - root_xy.min(axis=0)).max()) / 2.0
-    stage_half = traj_half + half * 1.05
-    scroll_mode = stage_half > 4.0 * half
-    view_half = half if follow else max(stage_half, half)
+    view_half = half if follow else max(traj_half + half, half)
     centers = _smooth_path(root_xy, window=max(5, T // 12)) if follow \
         else np.repeat(traj_center[None, :], T, axis=0)
     center0 = centers[0]
 
     # Vertical extent hugs the subject (tall bipeds and flat crawlers both
     # fill the frame); the box aspect mirrors the ranges to avoid distortion.
-    z_top = ground_z + max(height * 1.18, view_half * 0.3)
+    z_top = ground_z + max(height * 1.15, view_half * 0.3)
     bounds = (center0[0] - view_half, center0[0] + view_half,
               center0[1] - view_half, center0[1] + view_half,
               ground_z, z_top)
@@ -822,59 +1099,74 @@ def render_skeleton_motion_ground(parents: Sequence[int], positions,
         box_aspect=(1.0, 1.0, (z_top - ground_z) / (2 * view_half)))
     ax.set_axis_off()
     # Fill the canvas: with the axes cage hidden there is nothing to clip,
-    # so spill the 3D box past the figure edges.
-    fig.subplots_adjust(left=-0.22, right=1.22, top=1.18, bottom=-0.18)
+    # so spill the 3D box past the figure edges. The bottom stays the most
+    # conservative side — the subject's lowest joint sits exactly on the
+    # lower z limit, so cropping there would cut its feet.
+    fig.subplots_adjust(left=-0.26, right=1.26, top=1.24, bottom=-0.18)
     if title:
-        fig.suptitle(title, fontsize=12, fontweight='bold', wrap=True, y=0.97)
-        fig.subplots_adjust(top=1.02)
+        _draw_caption(fig, title, figsize, title_font_size, top_base=1.15)
 
     from mpl_toolkits.mplot3d.art3d import Poly3DCollection
-    # Tile size from BOTH body dimensions — the geometric mean of height
-    # and horizontal span: an upright biped and a sprawling low body each
-    # get tiles proportioned to their overall bulk, and neither dimension
-    # alone can blow the scale up. View-based clamps keep it sane on
-    # degenerate shapes.
+    # Tile size from BOTH body dimensions — the geometric mean of height and
+    # horizontal span: an upright biped and a sprawling low body each get
+    # tiles proportioned to their bulk, and neither dimension alone can blow
+    # the scale up. The view-based clamp keeps 6-10 tiles across the window,
+    # which is what makes travel legible without turning the floor into a
+    # busy grid.
     body_span = 2.0 * radius_xy
     tile = float(np.clip(0.35 * np.sqrt(max(height * body_span, 1e-12)),
-                         half / 6.0, half / 2.0))
-    if scroll_mode:
-        # World-anchored whole tiles, refreshed per frame around the camera.
-        platform_half = 10 * view_half  # trail clip bound (window handles it)
-        quads, cols = _checker_tiles_window(*center0, view_half, tile, ground_z)
-        platform = Poly3DCollection(quads, facecolors=cols,
-                                    edgecolors='none', zorder=0)
-        ax.add_collection3d(platform)
-    else:
-        # One rigid bounded stage, world-fixed, tiles glued to it. The
-        # following camera slides over it; the stage edges sweeping through
-        # the frame are what makes the travel visible.
-        platform_half = stage_half
-        n_tiles = int(np.clip(round(2 * platform_half / tile), 4, 16))
-        local_quads, quad_colors = _checker_platform_local(
-            platform_half, n_tiles=n_tiles, z=ground_z)
-        platform = Poly3DCollection(local_quads + np.array(
-            [traj_center[0], traj_center[1], 0.0], dtype=np.float32),
-            facecolors=quad_colors, edgecolors='none', zorder=0)
-        ax.add_collection3d(platform)
+                         view_half / 5.0, view_half / 3.0))
+    quads, cols = _ground_tiles(ax, *center0, azim, view_half, tile,
+                                ground_z)
+    # Stroking each tile in its own fill colour closes the hairline seams
+    # matplotlib leaves between adjacent quads (they show up as white pin
+    # dots where four tiles meet).
+    platform = Poly3DCollection(quads, facecolors=cols, edgecolors=cols,
+                                linewidths=0.6, zorder=0)
+    ax.add_collection3d(platform)
+    # Rebuilding the floor is the single most expensive thing per frame, and
+    # the tiles are world-anchored: nothing about them changes until the
+    # camera has moved. Rebuild only after a fraction of a tile of travel
+    # (an in-place motion then builds the floor exactly once); the cull pad
+    # covers the tiles that enter during the interval.
+    rebuild_at = np.array(center0, dtype=np.float32)
+    rebuild_step = 0.2 * tile
 
     if spectral_feats is not None:
         spectral_feats = np.asarray(spectral_feats, dtype=np.float32)
         assert spectral_feats.shape[0] == J
         joint_colors = _spectral_to_rgb(spectral_feats)
-        edge_kwargs = dict(joint_edgecolors='k', joint_edgewidth=0.4)
+        edge_kwargs = dict(joint_edgecolors='0.15', joint_edgewidth=0.4)
     else:
         joint_colors = np.where(np.asarray(parents) == -1, 'r', 'b')
         edge_kwargs = {}
 
-    # The trajectory sits just above the tiles to avoid z-fighting.
-    eps = half * 4e-3
-    trail, = ax.plot(root_xy[:1, 0], root_xy[:1, 1], [ground_z + eps],
-                     color='tab:orange', linewidth=1.6, alpha=0.9, zorder=1)
+    # Ground-level artists sit just above the tiles to avoid z-fighting.
+    eps = max(view_half * 4e-3, 1e-6)
+    shadow_lc = None
+    if shadow:
+        # A straight-down projection of the bones. Cheap, but it is what
+        # makes foot contact — and its absence during a jump — legible.
+        shadow_lc = Line3DCollection(np.zeros((len(edges), 2, 3), np.float32),
+                                     colors=[_SHADOW_COLOR],
+                                     linewidths=bone_linewidth * 1.5,
+                                     alpha=0.28, zorder=1)
+        ax.add_collection3d(shadow_lc)
+
+    trail_lc = None
+    if trail:
+        # Age-faded so the head of the path (where the subject is now) is the
+        # strongest mark and the tail recedes instead of ringing the floor.
+        trail_lc = Line3DCollection(np.zeros((0, 2, 3), np.float32),
+                                    linewidths=1.6, zorder=2)
+        ax.add_collection3d(trail_lc)
 
     segs, lc, sc = _init_motion_artists(
         ax, edges, pts[0], joint_colors,
-        joint_size=joint_marker_size, bone_color='dimgray',
+        joint_size=joint_marker_size, bone_color=_BONE_COLOR,
         bone_linewidth=bone_linewidth, **edge_kwargs)
+    lc.set_zorder(3)
+    sc.set_zorder(4)
     # The root must never be occluded: inside a single scatter, points paint
     # in array order, so joints drawn after index 0 cover it. Re-draw the
     # root as its own topmost scatter (same size; red in the default
@@ -882,9 +1174,14 @@ def render_skeleton_motion_ground(parents: Sequence[int], positions,
     root_color = ([joint_colors[0]] if spectral_feats is not None else 'r')
     sc_root = ax.scatter(pts[0, 0:1, 0], pts[0, 0:1, 1], pts[0, 0:1, 2],
                          s=joint_marker_size, c=root_color,
-                         depthshade=False, zorder=10, **(
-                             dict(edgecolors='k', linewidths=0.4)
+                         depthshade=False, zorder=5, **(
+                             dict(edgecolors='0.15', linewidths=0.4)
                              if spectral_feats is not None else {}))
+
+    shadow_segs = np.zeros((len(edges), 2, 3), np.float32)
+    shadow_segs[..., 2] = ground_z + eps
+    trail_rgba = np.zeros((max(T - 1, 1), 4), np.float32)
+    trail_rgba[:, :3] = _TRAIL_COLOR
 
     frames: List[np.ndarray] = []
     for t in range(T):
@@ -895,20 +1192,40 @@ def render_skeleton_motion_ground(parents: Sequence[int], positions,
         sc._offsets3d = (P[:, 0], P[:, 1], P[:, 2])
         sc_root._offsets3d = (P[0:1, 0], P[0:1, 1], P[0:1, 2])
         cx, cy = centers[t]
-        tx = root_xy[:t + 1, 0].astype(np.float32).copy()
-        ty = root_xy[:t + 1, 1].astype(np.float32).copy()
-        off = (np.abs(tx - traj_center[0]) > platform_half) | \
-              (np.abs(ty - traj_center[1]) > platform_half)
-        tx[off] = np.nan
-        trail.set_data_3d(tx, ty, np.full(t + 1, ground_z + eps))
-        if scroll_mode:
-            quads, cols = _checker_tiles_window(cx, cy, view_half, tile,
-                                                ground_z)
-            platform.set_verts(quads)
-            platform.set_facecolor(cols)
+
+        if shadow_lc is not None:
+            shadow_segs[..., :2] = segs[..., :2]
+            shadow_lc.set_segments(shadow_segs)
+
+        if trail_lc is not None and t >= 1:
+            path = root_xy[:t + 1]
+            # Drop the part of the path that has left the faded floor, so the
+            # trail never hangs in empty white space.
+            keep = np.max(np.abs(path - np.array([cx, cy], np.float32)),
+                          axis=1) < 1.6 * view_half
+            keep = keep[:-1] & keep[1:]
+            seg = np.empty((t, 2, 3), np.float32)
+            seg[:, 0, :2] = path[:-1]
+            seg[:, 1, :2] = path[1:]
+            seg[..., 2] = ground_z + eps
+            rgba = trail_rgba[:t].copy()
+            rgba[:, 3] = np.linspace(0.04, 0.7, t) * keep
+            trail_lc.set_segments(seg)
+            trail_lc.set_color(rgba)
+
+        # The limits move the camera, and the tile cull projects through
+        # them, so pan first and rebuild the floor after.
         if follow:
             ax.set_xlim(cx - view_half, cx + view_half)
             ax.set_ylim(cy - view_half, cy + view_half)
+        if t == 0 or max(abs(cx - rebuild_at[0]),
+                         abs(cy - rebuild_at[1])) > rebuild_step:
+            quads, cols = _ground_tiles(ax, cx, cy, azim, view_half, tile,
+                                        ground_z)
+            platform.set_verts(quads)
+            platform.set_facecolor(cols)
+            platform.set_edgecolor(cols)
+            rebuild_at = np.array([cx, cy], dtype=np.float32)
         frames.append(_capture_rgb(canvas))
 
     return np.stack(frames, axis=0)
@@ -1022,12 +1339,72 @@ def save_skeleton_motion_spectral(save_path: str, parents: Sequence[int],
     _write_video(save_path, frames, fps)
 
 
+def render_skeleton_tpose_ground(parents: Sequence[int], positions,
+                                 spectral_feats=None,
+                                 elev: float = 20,
+                                 azim: float = -60,
+                                 rotate_root: bool = True,
+                                 title: Optional[str] = None,
+                                 title_font_size: float = CAPTION_FONT_SIZE,
+                                 joint_marker_size: float = 18.0,
+                                 bone_linewidth: float = 1.9,
+                                 shadow: bool = True,
+                                 view_margin: float = 1.25,
+                                 figsize: Tuple[float, float] = (6, 6),
+                                 dpi: int = 120) -> np.ndarray:
+    """A single rest pose on the clip previews' checkerboard floor.
+
+    Same framing, floor, contact shadow, spectral palette and caption type as
+    :func:`render_skeleton_motion_ground`, so an object's T-pose card and its
+    clip previews read as one set. Rendered as a one-frame motion with the
+    camera parked (``follow=False``) and no root trail — there is nothing
+    moving to follow or to trace.
+
+    ``positions`` is one pose, ``(J, 3)``; a ``(1, J, 3)`` sequence is
+    accepted too. ``title`` is normally the object type.
+    """
+    pts = _as_xyz(positions)
+    if pts.ndim == 2:
+        pts = pts[None]
+    assert pts.ndim == 3 and pts.shape[0] == 1, (
+        f"a T-pose is one frame, got {pts.shape}")
+    return render_skeleton_motion_ground(
+        parents, pts, spectral_feats=spectral_feats, elev=elev, azim=azim,
+        rotate_root=rotate_root, follow=False, title=title,
+        title_font_size=title_font_size,
+        joint_marker_size=joint_marker_size, bone_linewidth=bone_linewidth,
+        shadow=shadow, trail=False, view_margin=view_margin,
+        figsize=figsize, dpi=dpi)[0]
+
+
+def save_skeleton_tpose_ground(save_path: str, parents: Sequence[int],
+                               positions, spectral_feats=None,
+                               elev: float = 20, azim: float = -60,
+                               rotate_root: bool = True,
+                               title: Optional[str] = None,
+                               title_font_size: float = CAPTION_FONT_SIZE,
+                               shadow: bool = True,
+                               view_margin: float = 1.25,
+                               figsize: Tuple[float, float] = (6, 6),
+                               dpi: int = 120) -> None:
+    """Render and save a ground-plane T-pose PNG (see
+    :func:`render_skeleton_tpose_ground`)."""
+    _write_image(save_path, render_skeleton_tpose_ground(
+        parents, positions, spectral_feats=spectral_feats, elev=elev,
+        azim=azim, rotate_root=rotate_root, title=title,
+        title_font_size=title_font_size, shadow=shadow,
+        view_margin=view_margin, figsize=figsize, dpi=dpi))
+
+
 def save_skeleton_motion_ground(save_path: str, parents: Sequence[int],
                                 positions, spectral_feats=None,
                                 fps: int = 20, elev: float = 20,
                                 azim: float = -60, rotate_root: bool = True,
                                 follow: bool = True,
                                 title: Optional[str] = None,
+                                title_font_size: float = CAPTION_FONT_SIZE,
+                                shadow: bool = True, trail: bool = True,
+                                view_margin: float = 1.0,
                                 figsize: Tuple[float, float] = (6, 6),
                                 dpi: int = 120) -> None:
     """Render and save a ground-plane motion MP4 (see
@@ -1035,5 +1412,6 @@ def save_skeleton_motion_ground(save_path: str, parents: Sequence[int],
     frames = render_skeleton_motion_ground(
         parents, positions, spectral_feats=spectral_feats, elev=elev,
         azim=azim, rotate_root=rotate_root, follow=follow, title=title,
-        figsize=figsize, dpi=dpi)
+        title_font_size=title_font_size, shadow=shadow, trail=trail,
+        view_margin=view_margin, figsize=figsize, dpi=dpi)
     _write_video(save_path, frames, fps)

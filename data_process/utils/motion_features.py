@@ -58,8 +58,7 @@ from data_process.utils.plotting import (
     save_skeleton_motion,
     save_skeleton_motion_ground,
     save_skeleton_motion_spectral,
-    save_skeleton_tpose,
-    save_skeleton_tpos_spectral,
+    save_skeleton_tpose_ground,
 )
 from data_process.feature_extraction.metadata import (
     atomic_output_path,
@@ -71,6 +70,16 @@ from data_process.feature_extraction.metadata import (
 # the canonical target diameter (below this the scale factor blows up / divides
 # by zero).
 MIN_SKELETON_DIAMETER = 1e-8
+
+# Preview geometry, shared by the clip MP4s and the T-pose cards so the two
+# read as one set. The cost of a frame is dominated by matplotlib's 3D
+# projection, not by rasterising it: measured on a 60-frame clip, 960x960 runs
+# within 4% of 640x640 (45 -> 47 ms/frame) while 1280x1280 costs 36% more. 150
+# dpi is therefore close to free, and dpi (rather than figsize) is the knob to
+# turn — it leaves the point-based layout, and so the caption's wrapping and
+# relative type size, exactly as it was.
+PREVIEW_FIGSIZE = (6.4, 6.4)
+PREVIEW_DPI = 150
 
 
 class DegenerateSkeletonError(ValueError):
@@ -236,11 +245,19 @@ def _load_npz_anim(object_npz_path, raw_parents, raw_njoints,
         motion_anim = motion_anim[:, corps_idxs]
     motion_anim = motion_anim[:, bfs_order]
 
-    if fps >= 60:
+    # ``fps`` is the object-level rate, read once from the T-pose reference
+    # NPZ; a clip re-exported at a different rate carries its own, which wins.
+    clip_fps = int(anim_data['fps']) if 'fps' in anim_data else int(fps)
+    if clip_fps != int(fps):
+        logger.warning(f'Clip fps {clip_fps} differs from the object-level '
+                       f'{int(fps)} fps; using the clip\'s own: {object_npz_path}')
+
+    # Halve until below 60 fps. A single halving leaves a 120 fps source at
+    # 60, i.e. twice the per-frame velocity scale of every 30 fps clip.
+    motion_fps = clip_fps
+    while motion_fps >= 60 and len(motion_anim) > 1:
         motion_anim = motion_anim[::2]
-        motion_fps = fps // 2
-    else:
-        motion_fps = fps
+        motion_fps //= 2
 
     return motion_anim, motion_fps, None
 
@@ -473,6 +490,47 @@ def _activity_below_threshold(global_positions, threshold):
     return is_low, metrics
 
 
+def _discontinuity_metrics(global_positions):
+    """Per-frame mean joint displacement in body units, plus its median / max.
+
+    A clip stitched together from several actions (or one with a teleporting
+    root) shows a single frame whose displacement dwarfs the rest of the clip.
+    """
+    if len(global_positions) < 2:
+        return {'step_med': 0.0, 'step_max': 0.0, 'jump_ratio': 0.0, 'jump_frames': 0}
+    extent = float(np.ptp(global_positions.reshape(-1, 3), axis=0).max()) or 1.0
+    step = np.linalg.norm(np.diff(global_positions, axis=0), axis=2).mean(1) / extent
+    med = float(np.median(step))
+    mx = float(step.max())
+    return {'step_med': med, 'step_max': mx,
+            'jump_ratio': float(mx / med) if med > 1e-9 else float('inf'),
+            'jump_frames': int((step > max(6 * med, 0.05)).sum())}
+
+
+def _discontinuity_above_threshold(global_positions, step_threshold, ratio_threshold):
+    """Return (is_discontinuous, metrics).
+
+    Flags a clip when one frame moves the skeleton at least *step_threshold*
+    body lengths AND that step is at least *ratio_threshold* times the clip's
+    median step — the signature of concatenated actions, not of fast motion,
+    which raises the median too. Non-finite input counts as discontinuous.
+    """
+    if not np.isfinite(global_positions).all():
+        return True, {'step_med': 0.0, 'step_max': float('inf'),
+                      'jump_ratio': float('inf'), 'jump_frames': len(global_positions)}
+    metrics = _discontinuity_metrics(global_positions)
+    is_bad = (metrics['step_max'] >= step_threshold
+              and metrics['jump_ratio'] >= ratio_threshold)
+    return is_bad, metrics
+
+
+def _format_discontinuity(metrics):
+    return (f'max_step={metrics["step_max"]:.3f} body/frame, '
+            f'median={metrics["step_med"]:.4f}, '
+            f'ratio={metrics["jump_ratio"]:.1f}, '
+            f'jump_frames={metrics["jump_frames"]}')
+
+
 def _format_activity(metrics):
     return (f'joint={metrics["joint_activity"]:.4f}, '
             f'topk={metrics["joint_activity_topk"]:.4f}, '
@@ -523,7 +581,7 @@ def save_clip(clip_name,
             save_path=clip_vis_path, parents=parents,
             positions=global_positions, spectral_feats=spectral_feats,
             fps=int(motion_fps), title=title,
-            figsize=(6.4, 6.4), dpi=100,
+            figsize=PREVIEW_FIGSIZE, dpi=PREVIEW_DPI,
         )
         return
     if spectral_feats is not None:
@@ -531,34 +589,34 @@ def save_clip(clip_name,
             save_path=clip_vis_path, parents=parents,
             positions=global_positions, spectral_feats=spectral_feats,
             fps=int(motion_fps), title=title,
-            figsize=(6.4, 6.4), dpi=100,
+            figsize=PREVIEW_FIGSIZE, dpi=PREVIEW_DPI,
         )
     else:
         save_skeleton_motion(
             save_path=clip_vis_path, parents=parents,
             positions=global_positions, fps=int(motion_fps), title=title,
-            figsize=(6.4, 6.4), dpi=100,
+            figsize=PREVIEW_FIGSIZE, dpi=PREVIEW_DPI,
         )
 
 
 def _save_tpose_vis(save_dir, object_type, parents, tpos_anim,
                     spectral_feats=None):
+    """Write the object's canonical rest pose as ``tpose/<object_type>.png``.
+
+    Same checkerboard floor, framing and caption type as the clip previews
+    beside it, captioned with the object type, so a T-pose card and the
+    object's MP4s read as one set. ``spectral_feats``, when given, colours
+    the joints with the same PCA palette the previews use.
+    """
     tpos_save_dir = pjoin(save_dir, 'tpose')
     os.makedirs(tpos_save_dir, exist_ok=True)
     tpos_vis_path = pjoin(tpos_save_dir, f'{object_type}.png')
     tpos_global_pos = positions_global(tpos_anim)[0]
-    if spectral_feats is not None:
-        save_skeleton_tpos_spectral(
-            save_path=tpos_vis_path, parents=parents,
-            positions=tpos_global_pos, spectral_feats=spectral_feats,
-            figsize=(6.4, 6.4), dpi=100,
-        )
-    else:
-        save_skeleton_tpose(
-            save_path=tpos_vis_path, parents=parents,
-            positions=tpos_global_pos,
-            figsize=(6.4, 6.4), dpi=100,
-        )
+    save_skeleton_tpose_ground(
+        save_path=tpos_vis_path, parents=parents,
+        positions=tpos_global_pos, spectral_feats=spectral_feats,
+        title=object_type, figsize=PREVIEW_FIGSIZE, dpi=PREVIEW_DPI,
+    )
 
 
 # ===========================================================================
@@ -625,6 +683,16 @@ def _process_motion_file(object_npz_path, ctx):
             })
             continue
 
+        is_jumpy, jump_metrics = _discontinuity_above_threshold(
+            clip_global_positions, ctx['jump_step_threshold'],
+            ctx['jump_ratio_threshold'])
+        if is_jumpy:
+            filtered.append({
+                'name': clip_name,
+                'reason': f'discontinuous motion: {_format_discontinuity(jump_metrics)}',
+            })
+            continue
+
         save_clip(
             clip_name,
             clip_global_positions, clip_local_rotations,
@@ -655,6 +723,7 @@ def process_object(object_type, object_npzs, save_dir,
                    expected_names=None, require_face=False,
                    target_diameter=2.0, activity_threshold=0.02,
                    static_threshold=1e-05, min_frames=8,
+                   jump_step_threshold=0.2, jump_ratio_threshold=8.0,
                    min_joints=None, max_joints=None,
                    use_tpos_ground_height=False, save_vis=True,
                    vis_ground=False):
@@ -777,6 +846,8 @@ def process_object(object_type, object_npzs, save_dir,
         'activity_threshold': activity_threshold,
         'static_threshold': static_threshold,
         'min_frames': min_frames,
+        'jump_step_threshold': jump_step_threshold,
+        'jump_ratio_threshold': jump_ratio_threshold,
         # I/O
         'motions_save_dir': motions_save_dir,
         'animations_save_dir': animations_save_dir,

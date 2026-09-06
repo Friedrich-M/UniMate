@@ -6,8 +6,8 @@ defines the rig's lateral axis for heading-angle computation. For serpentine
 rigs with no bilateral symmetry, the LLM picks longitudinal body-axis
 endpoints (head-tip / tail-tip) and sets ``body_axis: true``.
 
-Backends (see :mod:`llm`): local HF causal LM, OpenAI API (default:
-gpt-5-mini), DeepSeek API.
+Backends (see :mod:`llm`): DeepSeek API (default: ``deepseek-v4-flash``),
+OpenAI API, or a local HF causal LM.
 
 Inputs :
     ``joint_names.json``       — ``{rig_id: [raw_joint_name, ...]}``
@@ -28,9 +28,9 @@ Pipeline per rig:
 
 Usage:
     python -m data_process.joint_annotation.face_select_llm \\
-        --input_dir <export_dir>                      # OpenAI gpt-5-mini
+        --input_dir <export_dir>                      # DeepSeek v4-flash (default)
     python -m data_process.joint_annotation.face_select_llm \\
-        --input_dir <export_dir> --model deepseek-v4-flash
+        --input_dir <export_dir> --model gpt-5-mini
     python -m data_process.joint_annotation.face_select_llm \\
         --input_dir <export_dir> --model Qwen/Qwen3-8B
 """

@@ -2,14 +2,15 @@
 # Stage 2 — caption multi-view motion renders with a VLM.
 # The backend is picked from MODEL, with the same rules as detect_backend() in
 # vlm_caption/backends.py:
-#   *qwen* (default, any case) -> local Qwen3-VL / Qwen3.5 (GPU-bound; supports --multi-gpu)
+#   *qwen* (default, any case) -> local Qwen3.5 / Qwen3.8 / Qwen3-VL (GPU-bound; supports --multi-gpu)
 #   gemini*                    -> Gemini API    (needs GOOGLE_API_KEY)
 #   anything else              -> OpenAI-compatible API (needs OPENAI_API_KEY)
 #
 # Usage:
-#   bash data_process/scripts/run_caption_motion.sh objaverse                # local Qwen3-VL
+#   bash data_process/scripts/run_caption_motion.sh objaverse                # local Qwen3.5-9B (default)
 #   bash data_process/scripts/run_caption_motion.sh truebones --multi-gpu    # all visible GPUs (local backend only)
-#   MODEL=Qwen/Qwen3.5-9B bash data_process/scripts/run_caption_motion.sh objaverse
+#   MODEL=Qwen/Qwen3.8-27B bash data_process/scripts/run_caption_motion.sh objaverse            # 27B: one 80 GB GPU
+#   MODEL=Qwen/Qwen3-VL-8B-Instruct bash data_process/scripts/run_caption_motion.sh objaverse
 #   MODEL=gemini-3-flash-preview bash data_process/scripts/run_caption_motion.sh objaverse
 #   MODEL=gpt-5-mini NUM_WORKERS=16 bash data_process/scripts/run_caption_motion.sh mixamo
 #
@@ -44,7 +45,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 # ── Backend from MODEL (mirrors vlm_caption/backends.py detect_backend) ─
-MODEL=${MODEL:-Qwen/Qwen3-VL-8B-Instruct}
+MODEL=${MODEL:-Qwen/Qwen3.5-9B}
 if [[ "${MODEL,,}" == *qwen* ]]; then
     backend=local                       # backends.py: BACKEND_QWEN
 elif [[ "$MODEL" == gemini* ]]; then

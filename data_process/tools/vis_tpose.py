@@ -44,10 +44,10 @@ from data_process.utils.plotting import save_skeleton_tpose_annotated  # noqa: E
 
 
 REQUIRED_KEYS = ("rest_local_pos", "rest_local_rot", "names", "parents")
+DEFAULT_OUTPUT_DIR = "outputs/face_joints_vis"
 
 
 def load_tpose_from_npz(npz_path):
-    # type: (str) -> Tuple[np.ndarray, List[str], np.ndarray]
     """Load rest-pose data from a motion NPZ and compute global T-pose positions.
 
     Returns:
@@ -88,7 +88,6 @@ def load_tpose_from_npz(npz_path):
 
 def render_one(npz_path, output_path, *, font_size, joint_marker_size,
                bone_linewidth):
-    # type: (str, str, int, float, float) -> None
     """Render one NPZ as an annotated T-pose PNG."""
     parents, names, tpose_positions = load_tpose_from_npz(npz_path)
     os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
@@ -104,7 +103,6 @@ def render_one(npz_path, output_path, *, font_size, joint_marker_size,
 
 
 def find_motion_npz(motions_dir, key):
-    # type: (str, str) -> Optional[Path]
     """Resolve the first motion NPZ whose prefix-before-'-' matches ``key``.
 
     Motion files are named ``<key>-<clip_name>.npz`` (e.g.
@@ -117,7 +115,6 @@ def find_motion_npz(motions_dir, key):
 
 
 def collect_keys_from_motions_dir(motions_dir):
-    # type: (str) -> List[str]
     """Collect unique keys (prefix before the first ``-``) from NPZs in ``motions_dir``.
 
     NPZs without a ``-`` in their stem are treated as their own key.
@@ -129,11 +126,7 @@ def collect_keys_from_motions_dir(motions_dir):
     return sorted(keys)
 
 
-DEFAULT_OUTPUT_DIR = "outputs/face_joints_vis"
-
-
 def default_single_output_path(npz_path):
-    # type: (str) -> str
     """Default single-mode output: ``<DEFAULT_OUTPUT_DIR>/<stem>_tpose_annotated.png``."""
     return os.path.join(DEFAULT_OUTPUT_DIR,
                         "{}_tpose_annotated.png".format(Path(npz_path).stem))
@@ -253,8 +246,8 @@ def main():
     print("Rendering {} T-poses ({})".format(len(keys), source_desc))
 
     rendered = skipped_existing = missing_npz = failed = 0
-    missing_examples = []  # type: List[str]
-    failed_examples = []   # type: List[str]
+    missing_examples = []
+    failed_examples = []
 
     for key in tqdm(keys, unit="seq", dynamic_ncols=True):
         out_path = os.path.join(args.output_dir, "{}.png".format(key))

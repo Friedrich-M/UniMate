@@ -10,11 +10,11 @@
 #   ANIM_PATH=clip.npz CHAR_PATH=char.fbx bash data_process/scripts/run_animate_motion.sh mixamo
 #
 # Env overrides:
-#   ANIM_PATH   (required) motion .npz (or legacy .npy)
+#   ANIM_PATH   (required) motion .npz, or a .npy of model motion features
 #   CHAR_PATH   character mesh (auto-resolved for truebones/objaverse; required for mixamo)
 #   COND_PATH   cond.npy (default: dataset/features/<dataset>/cond.npy)
 #   OUTPUT_DIR  (default: outputs/animated)
-#   ANIM_MODE   fk|ik, legacy .npy only (default: fk)
+#   ANIM_MODE   fk|ik, .npy input only (default: fk)
 
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/_common.sh"

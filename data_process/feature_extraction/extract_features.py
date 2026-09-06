@@ -11,6 +11,9 @@ Supports three dataset layouts via ``--dataset_type``:
   ``data_dir/motions`` with no ``{object_type}-`` prefix; caption keys are
   bare motion stems.
 
+An optional ``filtered_clips.txt`` listing individual clips to skip is read
+for every layout.
+
 Stage-2 (captions, category groups) and stage-3 (clean / face joint names)
 metadata JSONs are read from ``data_dir`` — see
 :mod:`data_process.feature_extraction.metadata`.
@@ -53,6 +56,7 @@ from data_process.feature_extraction.metadata import (
     get_object_face_joints,
     get_object_metadata,
     load_all_metadata,
+    load_json,
     print_summary,
     save_metadata_report,
     save_outputs,
@@ -77,10 +81,15 @@ def parse_args():
     parser.add_argument("--save_dir", type=str, required=True,
                         help="Output directory for processed clips and metadata")
     # Clip windowing
-    parser.add_argument("--max_clip_len", type=int, default=180,
+    parser.add_argument("--max_clip_len", type=int, default=200,
                         help="Max frames per saved clip")
-    parser.add_argument("--diffusion_max_len", type=int, default=60,
-                        help="Model training max length (dataloader random-crops to this)")
+    parser.add_argument("--diffusion_max_len", type=int, default=90,
+                        help="Longest model training max length (the dataloader "
+                             "random-crops to it). It sets the clip overlap: a "
+                             "training crop is only reachable when it fits inside "
+                             "one saved clip, so the stride is max_clip_len minus "
+                             "this value. Set it to the largest max_motion_length "
+                             "you train with.")
     parser.add_argument("--apply_clip", action="store_true", default=False,
                         help="Crop long motions into overlapping fixed-length clips of "
                              "max_clip_len frames (stride = max_clip_len - "
@@ -107,6 +116,16 @@ def parse_args():
     parser.add_argument("--static_threshold", type=float, default=1e-5,
                         help="Per-frame max-joint displacement below which a frame "
                              "is static; leading/trailing static frames are trimmed")
+    parser.add_argument("--jump_step_threshold", type=float, default=0.2,
+                        help="Discontinuity filter: a clip is dropped when one "
+                             "frame moves the skeleton at least this many body "
+                             "lengths AND that step is at least "
+                             "--jump_ratio_threshold times the clip median "
+                             "(concatenated actions / teleports). 0 disables.")
+    parser.add_argument("--jump_ratio_threshold", type=float, default=8.0,
+                        help="Discontinuity filter: max/median per-frame joint "
+                             "displacement ratio required alongside "
+                             "--jump_step_threshold.")
     parser.add_argument("--min_frames", type=int, default=8,
                         help="Minimum frame count for a motion to be kept "
                              "(checked after downsampling and static trimming)")
@@ -114,9 +133,8 @@ def parse_args():
                         default=True,
                         help="(mixamo only) Restrict the rig to the built-in "
                              "22-joint humanoid core (drops finger chains and "
-                             "End bones) — replaces the retired "
-                             "corps_joint_names.json. Use --no-mixamo_core_joints "
-                             "to keep the full 65-joint skeleton.")
+                             "End bones). Use --no-mixamo_core_joints to keep "
+                             "the full 65-joint skeleton.")
     parser.add_argument("--min_joints", type=int, default=8,
                         help="Skip object types with fewer joints than this "
                              "(counted after corps filtering)")
@@ -124,12 +142,29 @@ def parse_args():
                         help="Skip object types with more joints than this "
                              "(counted after corps filtering)")
     # Objaverse-only filtering
+    parser.add_argument("--filtered_clips", type=str, default="auto",
+                        help="Path to a txt file listing individual export "
+                             "clips (motion NPZ stems) to skip, one per line "
+                             "with optional '#' comments. Default 'auto' uses "
+                             "<data_dir>/filtered_clips.txt if present. Pass an "
+                             "empty string to disable. Complements the on-the-fly "
+                             "quality filters; entries land in filtered_clips.json.")
     parser.add_argument("--filtered_objects", type=str, default="auto",
                         help="(objaverse only) Path to a txt file listing object "
                              "types to skip (one per line; blanks and '#' comments "
                              "ignored). Default 'auto' uses "
                              "<data_dir>/filtered_objects.txt if present. Pass an "
                              "empty string to disable.")
+    parser.add_argument("--category_groups", type=str, default="auto",
+                        help="Path to the body-plan category JSON copied into "
+                             "the feature dir (the training loader reads it for "
+                             "objects_subset). Default 'auto' uses "
+                             "<data_dir>/category_groups.json if present. Pass "
+                             "an empty string to leave it out — the stage-2 "
+                             "classifier may still be running, and a partial "
+                             "file would land in the feature dir as if it were "
+                             "complete. Copy the finished file in afterwards; "
+                             "nothing else in this stage reads it.")
     # Execution
     parser.add_argument("--num_workers", type=int, default=1,
                         help="Parallel worker processes (object types are independent)")
@@ -138,27 +173,71 @@ def parse_args():
     parser.add_argument("--vis_ground", action=argparse.BooleanOptionalAction,
                         default=True,
                         help="Render previews with a checkerboard ground plane, "
-                             "follow camera and root trajectory (default). "
-                             "--no-vis_ground falls back to the legacy plain "
-                             "cubic view.")
+                             "follow camera, contact shadow and root "
+                             "trajectory (default). --no-vis_ground renders "
+                             "the plain cubic view instead.")
     return parser.parse_args()
 
 
-def resolve_filtered_objects_path(path, data_dir):
+def _resolve_skip_list_path(path, data_dir, filename):
+    """Both skip lists are optional: a missing file simply disables that step.
+
+    ``"auto"`` looks for *filename* in *data_dir*; an empty string disables the
+    list; any other value is used as given but is still skipped (with a warning)
+    when it does not exist, so a stale path never aborts a run.
+    """
+    if not path:
+        return None
     if path == "auto":
-        default = pjoin(data_dir, 'filtered_objects.txt')
-        return default if os.path.isfile(default) else None
-    return path or None
+        default = pjoin(data_dir, filename)
+        if os.path.isfile(default):
+            return default
+        logger.info(f'No {filename} in {data_dir}; skipping that filter step')
+        return None
+    if os.path.isfile(path):
+        return path
+    logger.warning(f'Skip list {path!r} not found; skipping that filter step')
+    return None
+
+
+def resolve_filtered_objects_path(path, data_dir):
+    return _resolve_skip_list_path(path, data_dir, 'filtered_objects.txt')
+
+
+def resolve_filtered_clips_path(path, data_dir):
+    return _resolve_skip_list_path(path, data_dir, 'filtered_clips.txt')
+
+
+def resolve_category_groups(path, metadata):
+    """Return the category groups to copy into the feature dir, or None.
+
+    ``"auto"`` (the default) keeps whatever ``load_all_metadata`` found in
+    the data dir; an empty string drops it; any other value is loaded as an
+    explicit path. Nothing in this stage consumes the groups — they are
+    passed through to the feature dir — so dropping them only means the
+    copy is made later, by hand, once the classifier has finished.
+    """
+    if not path:
+        if metadata.pop('category_groups', None) is not None:
+            logger.info('Ignoring category_groups.json (--category_groups="")')
+        return None
+    if path != 'auto':
+        groups = load_json(path)
+        if groups is None:
+            raise ValueError(f'--category_groups {path!r} not found')
+        metadata['category_groups'] = groups
+    return metadata.get('category_groups')
 
 
 def load_filtered_objects(path):
+    """Read a skip list; a falsy path (no file) yields an empty set."""
     if not path:
         return set()
     with open(path, 'r') as f:
-        return {
-            line.strip() for line in f
-            if line.strip() and not line.startswith('#')
-        }
+        # one entry per line; blank lines and '#' comments (whole-line or
+        # trailing, e.g. "<uuid>    # bone/bone pair") are ignored
+        entries = (line.split('#', 1)[0].strip() for line in f)
+        return {e for e in entries if e}
 
 
 def discover_object_types(motion_dir, dataset_type, args):
@@ -172,6 +251,14 @@ def discover_object_types(motion_dir, dataset_type, args):
     if len(all_motions) != len(entries):
         logger.info(f'Ignoring {len(entries) - len(all_motions)} non-NPZ '
                     f'entries in {motion_dir}')
+
+    clips_path = resolve_filtered_clips_path(args.filtered_clips, args.data_dir)
+    skip_clips = load_filtered_objects(clips_path)
+    if skip_clips:
+        before = len(all_motions)
+        all_motions = [m for m in all_motions if m[:-4] not in skip_clips]
+        logger.info(f'Loaded {len(skip_clips)} entries from {clips_path}; '
+                    f'{before} -> {len(all_motions)} motion files after clip filtering')
 
     if dataset_type == 'mixamo':
         # Single object type; no prefix-based grouping.
@@ -229,7 +316,8 @@ CACHE_PARAM_KEYS = (
     'max_clip_len', 'clip_stride', 'apply_clip',
     'max_path_len', 'max_freqs',
     'target_diameter', 'activity_threshold', 'static_threshold',
-    'min_frames', 'min_joints', 'max_joints',
+    'min_frames', 'jump_step_threshold', 'jump_ratio_threshold',
+    'min_joints', 'max_joints',
     'use_tpos_ground_height',
     'corps_names',
 )
@@ -253,6 +341,14 @@ def _cache_params(task):
     params = {k: task[k] for k in CACHE_PARAM_KEYS}
     for k in CACHE_DATA_KEYS:
         params[f'{k}_digest'] = _digest(task[k])
+    # The object's source clip list. A clip added to the export or newly
+    # listed in filtered_clips.txt must re-process the object: a cached
+    # result would otherwise keep the old clip set alive in the cond and
+    # leave the dropped clip's NPZ in motions/, which the training loader
+    # enumerates directly. Basenames only, so relocating data_dir (the
+    # export dirs are symlinks) does not invalidate every entry.
+    params['clips_digest'] = _digest(
+        sorted(os.path.basename(p) for p in task['object_npzs']))
     return params
 
 
@@ -290,6 +386,37 @@ def _load_cached_result(part_path, object_type, params, params_hash):
     return None
 
 
+def _prune_object_clips(save_dir, clip_prefix, prune_vis):
+    """Delete the clip files a previous run wrote for this object type.
+
+    ``process_object`` only ever writes, and the training loader enumerates
+    ``motions/`` rather than ``captions.json``, so a clip that disappears from
+    an object (removed from the export, or newly listed in
+    ``filtered_clips.txt``) would keep its stale
+    ``motions/{object}-{motion}-{idx}.npz`` on disk and still be trained on.
+    Called only on a cache miss, i.e. right before the object is rewritten in
+    full. ``clip_prefix`` is ``"{object_type}-"`` (empty for mixamo, whose
+    single object type owns every file in the directory).
+
+    Previews are pruned only when the run regenerates them (``--vis``), so a
+    later ``--no-vis`` run does not throw away the MP4s an earlier one made.
+    """
+    targets = [('motions', '.npz')] + ([('videos', '.mp4')] if prune_vis else [])
+    removed = 0
+    for sub, ext in targets:
+        directory = pjoin(save_dir, sub)
+        if not os.path.isdir(directory):
+            continue
+        for name in os.listdir(directory):
+            if name.startswith(clip_prefix) and name.endswith(ext):
+                try:
+                    os.remove(pjoin(directory, name))
+                    removed += 1
+                except OSError as e:  # noqa: PERF203 — one bad file must not abort
+                    logger.warning(f'Could not remove stale {sub}/{name}: {e}')
+    return removed
+
+
 def process_object_task(task):
     """Process one object type, caching its result for resume.
 
@@ -306,12 +433,18 @@ def process_object_task(task):
     """
     object_type = task.pop('object_type')
     part_path = task.pop('part_path')
+    clip_prefix = task.pop('clip_prefix')
     params = _cache_params(task)
     params_hash = _params_hash(params)
 
     cached = _load_cached_result(part_path, object_type, params, params_hash)
     if cached is not None:
         return object_type, cached, True
+
+    removed = _prune_object_clips(task['save_dir'], clip_prefix, task['save_vis'])
+    if removed:
+        logger.info(f'[{object_type}] removed {removed} clip files from a '
+                    f'previous run before re-processing')
 
     try:
         obj_cond, n_clips, n_frames, n_joints, filtered = process_object(
@@ -363,6 +496,10 @@ def build_object_tasks(args, clip_stride, motion_dir, metadata):
             part_path=_object_part_path(args.save_dir, object_type),
             object_npzs=collect_object_npzs(object_type, args.dataset_type,
                                             motion_dir, all_motions),
+            # Mixamo clip files carry no "{object_type}-" prefix; its single
+            # object type owns the whole directory.
+            clip_prefix=('' if args.dataset_type == 'mixamo'
+                         else f'{object_type}-'),
             save_dir=args.save_dir,
             max_clip_len=args.max_clip_len, clip_stride=clip_stride,
             apply_clip=args.apply_clip,
@@ -380,6 +517,8 @@ def build_object_tasks(args, clip_stride, motion_dir, metadata):
             activity_threshold=args.activity_threshold,
             static_threshold=args.static_threshold,
             min_frames=args.min_frames,
+            jump_step_threshold=args.jump_step_threshold,
+            jump_ratio_threshold=args.jump_ratio_threshold,
             min_joints=args.min_joints, max_joints=args.max_joints,
             save_vis=args.vis, vis_ground=args.vis_ground,
         ))
@@ -407,7 +546,7 @@ def main(args):
     logger.info(f'Loaded metadata from {args.data_dir}: '
                 + ', '.join(f'{k}={len(v)}' for k, v in metadata.items()))
     check_metadata_object_types_consistent(metadata)
-    category_groups = metadata.get('category_groups')
+    category_groups = resolve_category_groups(args.category_groups, metadata)
 
     tasks = build_object_tasks(args, clip_stride, motion_dir, metadata)
 

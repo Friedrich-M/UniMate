@@ -18,8 +18,8 @@ The counterpart for the *export* direction (Blender scene → NPZ) lives in
 import os
 import re
 
-import bmesh
 import bpy
+import bmesh  # registered by ``import bpy`` when running on the pip bpy module
 import numpy as np
 from loguru import logger
 from mathutils import Matrix, Quaternion
@@ -27,7 +27,6 @@ from mathutils import Matrix, Quaternion
 from data_process.utils.blender_export import (
     bind_action,
     clear_animation_state,
-    reset_scene,
 )
 
 RECONSTRUCTED_ACTION_NAME = "Reconstructed_Action"

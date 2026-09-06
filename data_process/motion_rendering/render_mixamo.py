@@ -18,7 +18,7 @@ import sys
 import argparse
 from pathlib import Path
 
-import bpy
+import bpy  # noqa: F401 — fail fast when the bpy module is unavailable
 from loguru import logger
 
 from data_process.utils.blender_export import discover_pose_actions

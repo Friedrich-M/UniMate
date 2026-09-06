@@ -24,7 +24,7 @@ from data_process.utils.export_markers import (  # noqa: F401  (re-exported)
     collect_joint_names_from_markers,
     is_asset_complete,
     mark_asset_complete,
-    merge_joint_names as _merge_joint_names,
+    merge_joint_names,
 )
 
 
@@ -1204,7 +1204,7 @@ def write_export_summary(output_dir, all_joint_names, fps=30, worker_suffix=""):
     if worker_suffix:
         merged = dict(all_joint_names)
     else:
-        merged = _merge_joint_names(output_dir, all_joint_names, log=logger.info)
+        merged = merge_joint_names(output_dir, all_joint_names, log=logger.info)
     with open(joint_names_path, 'w') as f:
         json.dump(merged, f, indent=2)
     logger.info(f"Saved joint names ({len(merged)} entries) to {joint_names_path}")

@@ -32,7 +32,7 @@ SAVE_DIR=${SAVE_DIR:-$(features_dir "$DATASET")}
 EXTRA_ARGS=()
 # Per-dataset joint-count range (skeletons outside it are skipped here, not
 # at export — the exports stay complete). Defaults in extract_features.py
-# are 8..150; objaverse keeps its wider historical range.
+# are 8..150; objaverse uses a wider range.
 case "$DATASET" in
     objaverse) EXTRA_ARGS+=(--min_joints 4 --max_joints 180) ;;
 esac

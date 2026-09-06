@@ -15,7 +15,6 @@ Usage (plain python — EEVEE needs the pip ``bpy`` module's GPU context):
 """
 
 import os
-import sys
 import argparse
 from pathlib import Path
 

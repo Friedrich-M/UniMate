@@ -1,0 +1,22 @@
+{
+  "_comment": "Hand truth for the 74 Truebones species (2026-09-05). Lists = every acceptable category.",
+  "Alligator": ["quadrupedal"], "Anaconda": ["serpentine"], "Ant": ["insectoid"], "Bat": ["avian"],
+  "Bear": ["quadrupedal"], "Bird": ["avian"], "BrownBear": ["quadrupedal"], "Buffalo": ["quadrupedal"],
+  "Buzzard": ["avian"], "Camel": ["quadrupedal"], "Cat": ["quadrupedal"], "Centipede": ["insectoid"],
+  "Chicken": ["bipedal"], "Comodoa": ["quadrupedal"], "Coyote": ["quadrupedal"], "Crab": ["insectoid"],
+  "Cricket": ["insectoid"], "Crocodile": ["quadrupedal"], "Crow": ["avian"], "Deer": ["quadrupedal"],
+  "Dog": ["quadrupedal"], "Dog2": ["quadrupedal"], "Dragon": ["avian"], "Eagle": ["avian"],
+  "Elephant": ["quadrupedal"], "FireAnt": ["insectoid"], "Flamingo": ["bipedal", "avian"], "Fox": ["quadrupedal"],
+  "Gazelle": ["quadrupedal"], "Giantbee": ["insectoid"], "Goat": ["quadrupedal"], "Hamster": ["quadrupedal"],
+  "HermitCrab": ["insectoid"], "Hippopotamus": ["quadrupedal"], "Horse": ["quadrupedal"], "Hound": ["quadrupedal"],
+  "Isopetra": ["insectoid"], "Jaguar": ["quadrupedal"], "Jaws": ["marine"], "KingCobra": ["serpentine"],
+  "Leapord": ["quadrupedal"], "Lion": ["quadrupedal"], "Lynx": ["quadrupedal"], "Mammoth": ["quadrupedal"],
+  "Monkey": ["quadrupedal", "bipedal"], "Ostrich": ["bipedal"], "Parrot": ["avian"], "Parrot2": ["avian"],
+  "Pigeon": ["avian"], "Pirrana": ["marine"], "PolarBear": ["quadrupedal"], "PolarBearB": ["quadrupedal"],
+  "Pteranodon": ["avian"], "Puppy": ["quadrupedal"], "Raindeer": ["quadrupedal"], "Raptor": ["bipedal"],
+  "Raptor2": ["bipedal"], "Raptor3": ["bipedal"], "Rat": ["quadrupedal"], "Rhino": ["quadrupedal"],
+  "Roach": ["insectoid"], "SabreToothTiger": ["quadrupedal"], "SandMouse": ["quadrupedal"], "Scorpion": ["insectoid"],
+  "Scorpion2": ["insectoid"], "Skunk": ["quadrupedal"], "Spider": ["insectoid"], "SpiderG": ["insectoid"],
+  "Stego": ["quadrupedal"], "Trex": ["bipedal"], "Tricera": ["quadrupedal"], "Tukan": ["avian"],
+  "Turtle": ["quadrupedal"], "Tyranno": ["bipedal"]
+}

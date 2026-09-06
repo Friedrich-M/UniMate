@@ -32,13 +32,16 @@ import os
 import sys
 from pathlib import Path
 
+import imageio
 import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
 from Animation import Animation, Quaternions, positions_global  # noqa: E402
 from data_process.utils.plotting import render_skeleton_motion_directed  # noqa: E402
-import imageio  # noqa: E402
+
+
+DEFAULT_OUTPUT_DIR = "outputs/motion_vis"
 
 
 def load_motion_from_npz(npz_path):
@@ -120,9 +123,6 @@ def compute_directions(global_pos, mode, face_joints=None):
         return (mid - global_pos[:, 0]).astype(np.float32)
 
     raise ValueError(f"unknown direction mode: {mode}")
-
-
-DEFAULT_OUTPUT_DIR = "outputs/motion_vis"
 
 
 def default_output_path(npz_path):

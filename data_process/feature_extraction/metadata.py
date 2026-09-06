@@ -96,8 +96,7 @@ def load_face_joint_names(source_dir):
 
 
 # The 22-joint humanoid core the mixamo rig is reduced to at extraction time
-# (drops the 40 finger bones plus the End bones). Replaces the retired
-# corps_joint_names.json side file; toggled by --mixamo_core_joints.
+# (drops the 40 finger bones plus the End bones); toggled by --mixamo_core_joints.
 MIXAMO_CORE_JOINTS = [
     "mixamorig:Hips",
     "mixamorig:Spine", "mixamorig:Spine1", "mixamorig:Spine2",
@@ -325,16 +324,19 @@ def compute_clip_windows(nframes, max_clip_len, clip_stride):
     frames. No returned window is ever longer than ``max_clip_len`` (the whole
     sequence is returned unsliced only when it already fits).
 
-    Leftover frames past the last strided window are handled by tail length:
+    Leftover frames past the last strided window are handled by tail length,
+    measured against the window overlap ``max_clip_len - clip_stride`` — the
+    longest training crop the clips are cut to hold:
 
-    - at least half a clip: emitted as their own (shorter) trailing window;
-    - shorter than that, but still adding at least as many new frames as a
-      normal window's overlap (``max_clip_len - clip_stride``): covered by a
-      full-length window anchored at the final frame — replacing the last
-      window when the frames it gives up stay covered by the one before it,
-      otherwise appended;
-    - shorter than that: dropped, rather than glued onto the previous window
-      (which is what used to push clips past ``max_clip_len``).
+    - at least one full training crop: emitted as their own (shorter)
+      trailing window, which is long enough to be croppable on its own;
+    - shorter than that: covered by a full-length window anchored at the
+      final frame, replacing the last window when the frames it gives up stay
+      covered by the one before it (always true once there are two or more
+      windows);
+    - shorter than that and there is only one window to replace: dropped,
+      rather than glued onto the previous window (which would push that clip
+      past ``max_clip_len``) or duplicated as a near-copy of it.
     """
     if not max_clip_len or nframes <= max_clip_len:
         return [(0, nframes)]
@@ -346,7 +348,10 @@ def compute_clip_windows(nframes, max_clip_len, clip_stride):
     last_end = clips[-1][1]
     if last_end < nframes:
         tail_len = nframes - last_end
-        if tail_len >= max_clip_len // 2:
+        # A trailing window earns its place once it can hold one full
+        # training crop, i.e. the overlap a normal window is given.
+        min_tail = max(1, max_clip_len - clip_stride)
+        if tail_len >= min_tail:
             clips.append((last_end, nframes))
         else:
             # Cover the tail with a full-length window anchored at the end.
@@ -355,10 +360,6 @@ def compute_clip_windows(nframes, max_clip_len, clip_stride):
             if slid_start <= prev_end:
                 # Free: the frames the last window gives up are still covered.
                 clips[-1] = (slid_start, nframes)
-            elif tail_len >= max(1, max_clip_len - clip_stride):
-                # Worth an extra window: it adds at least as many new frames
-                # as a normal window's overlap.
-                clips.append((slid_start, nframes))
             # Otherwise the tail is too small to pay for a window of its own.
 
     return clips

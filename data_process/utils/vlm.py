@@ -86,7 +86,7 @@ def select_frame_paths(paths, downsample_rate=1, max_frames=None):
     # type: (List[Path], int, Optional[int]) -> List[Path]
     """Choose which frames of one view to send to the VLM.
 
-    ``downsample_rate`` applies the legacy fixed stride first (the last
+    ``downsample_rate`` applies a fixed stride first (the last
     frame is re-appended — a bare ``[::rate]`` drops it whenever the count
     is not a multiple of the stride), then ``max_frames`` uniformly samples
     the remainder down to that budget.
@@ -497,12 +497,22 @@ def load_qwen_model(
     gpu_id=None,
 ):
     # type: (str, str, Optional[str], int, int, Optional[int]) -> Tuple
-    """Load Qwen3-VL model and processor.
+    """Load a Qwen3.5 / Qwen3-VL multimodal model and its processor.
+
+    Qwen3.5 (the default everywhere in this pipeline) and Qwen3.8 (the
+    27B option; same ``qwen3_5`` model type and processor) are natively
+    multimodal: the model card loads them with ``AutoModelForMultimodalLM``,
+    which resolves to ``Qwen3_5ForConditionalGeneration`` — the same class
+    ``AutoModelForImageTextToText`` maps to, kept as the fallback for older
+    transformers. Its vision tower uses 16-px patches merged 2x2, so one
+    visual token covers 32x32 pixels (``h*w/(32*32) + 2`` tokens per image,
+    per the Qwen3.5 model card); the Qwen3-VL guide recommends budgets of
+    256–1280 visual tokens per image (256*32*32 .. 1280*32*32 pixels).
 
     Args:
         model_name: HuggingFace model ID or local path
-            (e.g., "Qwen/Qwen3-VL-8B-Instruct", or "Qwen/Qwen3.5-9B" —
-            the qwen3_5 architecture needs transformers>=5).
+            (default in this pipeline "Qwen/Qwen3.5-9B"; also
+            "Qwen/Qwen3-VL-8B-Instruct" — qwen3_5 needs transformers>=5).
         device_map: Device placement strategy (default "auto").
         torch_dtype: Override dtype ("float16", "bfloat16", or None for auto).
         min_pixels: Minimum pixels per image (default 200704 = 256*28*28).
@@ -517,7 +527,11 @@ def load_qwen_model(
     Returns:
         (model, processor) tuple.
     """
-    from transformers import AutoModelForImageTextToText, AutoProcessor
+    from transformers import AutoProcessor
+    try:  # transformers>=5.x: the class the Qwen3.5 model card uses
+        from transformers import AutoModelForMultimodalLM as _AutoModel
+    except ImportError:
+        from transformers import AutoModelForImageTextToText as _AutoModel
 
     dtype = torch.bfloat16
     if torch_dtype == "float16":
@@ -539,7 +553,7 @@ def load_qwen_model(
     logger.info("Loading model: {} (dtype={}, device_map={}, attn={})".format(
         model_name, dtype, device_map, attn_implementation))
 
-    model = AutoModelForImageTextToText.from_pretrained(
+    model = _AutoModel.from_pretrained(
         model_name,
         dtype=dtype,
         device_map=device_map,
@@ -551,9 +565,12 @@ def load_qwen_model(
         max_pixels=max_pixels,
     )
 
-    logger.info("Model loaded (min_pixels={}, max_pixels={}, "
-                "~{} visual tokens per image)".format(
-                    min_pixels, max_pixels, max_pixels // (28 * 28)))
+    ip = getattr(processor, "image_processor", None)
+    px_per_token = (getattr(ip, "patch_size", 16) * getattr(ip, "merge_size", 2)) ** 2
+    logger.info("Model loaded: {} ({}; min_pixels={}, max_pixels={}, "
+                "{}-{} visual tokens per image at {} px/token)".format(
+                    type(model).__name__, model_name, min_pixels, max_pixels,
+                    min_pixels // px_per_token, max_pixels // px_per_token, px_per_token))
     return model, processor
 
 
@@ -633,7 +650,12 @@ def qwen_generate(model, processor, messages, max_tokens=300,
 
     gen_kwargs = dict(max_new_tokens=max_tokens)
     if do_sample:
-        gen_kwargs.update(do_sample=True, temperature=0.7, top_p=0.8, top_k=20)
+        # Qwen3.5 model card, "Instruct / General" row (thinking off):
+        # temperature 0.7, top_p 0.8, top_k 20, min_p 0.0,
+        # repetition_penalty 1.0 (presence_penalty 1.5 is a vLLM/SGLang
+        # sampler knob with no transformers equivalent).
+        gen_kwargs.update(do_sample=True, temperature=0.7, top_p=0.8, top_k=20,
+                          min_p=0.0, repetition_penalty=1.0)
     else:
         gen_kwargs.update(do_sample=False, temperature=None, top_p=None,
                           top_k=None)
@@ -666,10 +688,10 @@ def qwen_generate(model, processor, messages, max_tokens=300,
 def add_qwen_model_args(parser):
     """Add common Qwen model CLI arguments to an argparse parser."""
     parser.add_argument('--model', type=str,
-                        default='Qwen/Qwen3-VL-8B-Instruct',
-                        help='HuggingFace model ID or local path '
-                             '(e.g., Qwen/Qwen3-VL-8B-Instruct, '
-                             'Qwen/Qwen3-VL-72B-Instruct, Qwen/Qwen3.5-9B).')
+                        default='Qwen/Qwen3.5-9B',
+                        help='HuggingFace model ID or local path. Default Qwen/Qwen3.5-9B; '
+                             'alternatives: Qwen/Qwen3.8-27B (same qwen3_5 architecture, '
+                             '~56 GB bf16 -> one 80 GB GPU) and Qwen/Qwen3-VL-{8B,32B,72B}-Instruct.')
     parser.add_argument('--torch_dtype', type=str, default=None,
                         choices=['float16', 'bfloat16'],
                         help='Override model dtype (default: bfloat16).')

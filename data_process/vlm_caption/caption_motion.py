@@ -409,10 +409,10 @@ def parse_args():
 
     # ── Model ───────────────────────────────────────────────────────────────
     parser.add_argument('--model', type=str,
-                        default='Qwen/Qwen3-VL-8B-Instruct',
+                        default='Qwen/Qwen3.5-9B',
                         help='Model name. For qwen: HuggingFace model ID '
-                             '(default Qwen/Qwen3-VL-8B-Instruct; also e.g. '
-                             'Qwen/Qwen3.5-9B). For openai: '
+                             '(default Qwen/Qwen3.5-9B; also Qwen/Qwen3.8-27B or '
+                             'Qwen/Qwen3-VL-8B-Instruct). For openai: '
                              'API model (e.g., gpt-5-mini). For gemini: API model '
                              '(e.g., gemini-3-flash-preview).')
 

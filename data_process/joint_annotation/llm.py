@@ -27,9 +27,9 @@ BACKEND_OPENAI = "openai"
 VALID_BACKENDS = [BACKEND_LOCAL, BACKEND_OPENAI]
 
 MAX_RETRIES = 4
-# gpt-5-mini is the alternative once OPENAI credits are topped up; DeepSeek
-# think-low reached quality parity (0 side errors, 99.6% format compliance,
-# A/B 2026-08-30) at a fraction of the cost.
+# Default model for every LLM-assisted joint-annotation pass. Any
+# OpenAI-compatible model id (``gpt-*``) or a local HuggingFace causal LM works
+# as well; see ``detect_backend``.
 DEFAULT_MODEL = "deepseek-v4-flash"
 
 # DeepSeek's API speaks the OpenAI protocol, so ``deepseek-*`` models ride the

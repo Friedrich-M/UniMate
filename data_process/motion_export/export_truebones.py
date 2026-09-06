@@ -15,7 +15,7 @@ Usage (Blender headless):
         --output_dir dataset/export/truebones
 """
 
-import bpy
+import bpy  # noqa: F401 — fail fast when the bpy module is unavailable
 import sys
 import os
 import numpy as np

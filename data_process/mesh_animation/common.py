@@ -5,7 +5,7 @@ Every entry script in this package runs under Blender headless
 driving animation onto its armature, and exports GLB/FBX. They differ only in
 where the driving animation comes from:
 
-    animate_motion   feature NPZ (or legacy model ``.npy``) + ``cond.npy``
+    animate_motion   feature NPZ (or model-feature ``.npy``) + ``cond.npy``
     animate_npz      export-stage NPZ (bone names carried in the file)
     animate_fbx      raw animation FBX/GLB clips (action transfer by name)
     animate_mixamo   batch wrapper over ``animate_npz``
@@ -58,7 +58,7 @@ def parse_blender_argv(parser):
 def npz_scalar(data, key, default):
     """Read a scalar from an NpzFile / dict, falling back to *default*.
 
-    Mapping-free inputs (e.g. the legacy ``.npy`` ndarray in
+    Mapping-free inputs (e.g. the model-feature ``.npy`` ndarray in
     ``animate_motion``) have no keys and always yield *default*.
     """
     if hasattr(data, 'keys') and key in data:
@@ -134,7 +134,7 @@ def drive_and_export(char_armature, anim, rest_anim, bone_names, fps,
         extra_bones_strategy: How to treat armature bones absent from
             *bone_names* (see :func:`sync_armature_bones`).
         tpos_global_rot: Optional ``(nbones, 4)`` T-pose global rotations to
-            conjugate keyframes by (legacy ``.npy`` path in animate_motion).
+            conjugate keyframes by (``.npy`` model-feature path in animate_motion).
     """
     anim_local_mat = transforms_local(anim)          # (nframes, nbones, 4, 4)
     rest_local_mat = transforms_local(rest_anim)[0]  # (nbones, 4, 4)

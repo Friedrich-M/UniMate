@@ -8,7 +8,7 @@ topology, joint names, scale) and drives the original rigged asset with it.
 
 Pipeline:
   1. Load the cond entry for the requested ``--dataset_type`` and the motion
-     file (NPZ; legacy ``.npy`` model features are also accepted, see below).
+     file (NPZ, or the ``.npy`` motion features written by the model's sampler).
   2. Reconcile the character armature against the animation's bone list
      (see :func:`data_process.utils.blender_rig.sync_armature_bones`).
   3. Compute per-bone keyframes and bind them as a Blender Action.
@@ -96,7 +96,7 @@ def build_anim_from_npz(anim_path, cond_data):
 
 def build_anim_from_npy(anim_path, cond_data, anim_mode):
     """Build ``(anim, rest_anim, tpos_global_rot, raw_anim_data)`` from a
-    legacy ``.npy`` of model motion features.
+    ``.npy`` of model motion features (the format ``unimate.inference.sample`` saves).
 
     Decoding model features back into an ``Animation`` requires the
     training/inference package (``unimate.utils.motion_utils``), which is
@@ -109,7 +109,7 @@ def build_anim_from_npy(anim_path, cond_data, anim_mode):
         )
     except ImportError as exc:  # pragma: no cover — depends on the model package
         raise RuntimeError(
-            "Legacy .npy motion features need the training/inference package "
+            ".npy model motion features need the training/inference package "
             "(unimate.utils.motion_utils); pass a feature-format .npz instead."
         ) from exc
 
@@ -243,12 +243,12 @@ def animate_character(char_path, anim_path, cond_path, output_dir,
 
     Args:
         char_path: Character FBX/GLB (provides mesh + armature).
-        anim_path: Feature-format motion NPZ (or legacy NPY).
+        anim_path: Feature-format motion NPZ, or a ``.npy`` of model motion features.
         cond_path: ``cond.npy`` for the dataset.
         output_dir: Destination directory (created if missing).
         dataset_type: ``'truebones'`` | ``'objaverse'`` | ``'mixamo'``;
             controls how the cond-dict key is derived from ``anim_path``.
-        anim_mode: Recovery mode for legacy NPY input, ``'fk'`` or ``'ik'``.
+        anim_mode: Recovery mode for ``.npy`` model-feature input, ``'fk'`` or ``'ik'``.
         extra_bones_strategy: How to handle armature bones not present in
             the animation (see :func:`sync_armature_bones`).
     """
@@ -282,7 +282,7 @@ def parse_args():
                         help="Dataset that produced the cond/anim files; controls "
                              "how the cond-dict key is resolved.")
     parser.add_argument("--anim_path", type=str, required=True,
-                        help="Feature-format motion NPZ (or legacy .npy).")
+                        help="Feature-format motion NPZ, or a .npy of model motion features.")
     parser.add_argument("--char_path", type=str, default=None,
                         help="Character FBX/GLB. If omitted, auto-resolved from "
                              f"--dataset_type and --anim_path (truebones -> "
@@ -292,7 +292,7 @@ def parse_args():
                         help=f"cond.npy for the dataset (default: {COND_PATH_TEMPLATE}).")
     parser.add_argument("--output_dir", type=str, default='outputs/animated')
     parser.add_argument("--anim_mode", type=str, default='fk', choices=['fk', 'ik'],
-                        help="Recovery mode for legacy .npy input.")
+                        help="Recovery mode for .npy model-feature input.")
     parser.add_argument("--extra_bones_strategy", type=str, default='merge',
                         choices=list(EXTRA_BONES_STRATEGIES),
                         help="What to do with armature bones missing from the "
