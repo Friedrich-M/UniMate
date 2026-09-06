@@ -1,0 +1,85 @@
+{
+    "experiment": {
+        "name": "truebones_60frames_graph_adaln",
+        "output_dir": "./outputs/truebones_60frames_graph_adaln"
+    },
+    "truebones": {
+        "path": "dataset/features/truebones",
+        "objects_subset": "all"
+    },
+    "mixamo": {
+        "path": "dataset/features/mixamo"
+    },
+    "objaverse": {
+        "path": "dataset/features/objaverse",
+        "objects_num": -1,
+        "filter_object": false
+    },
+    "dataset": {
+        "dataset_list": [
+            "truebones"
+        ],
+        "topology_condition_type": "tpos",
+        "motion_repr": "unimate",
+        "test_split_ratio": 0.0,
+        "max_motion_length": 60,
+        "max_joints": 100,
+        "min_joints": 5,
+        "use_dataset_stats": true,
+        "balanced_stats": true,
+        "sampler_alpha": 0.5,
+        "use_addition_aug": true,
+        "use_removal_aug": true,
+        "use_pooling_aug": true,
+        "use_perturbation_aug": true,
+        "ground_motion_height": true,
+        "realign_feature": true
+    },
+    "model": {
+        "attention": "graph",
+        "text_cond": "adaln",
+        "use_joint_name_emb": true,
+        "latent_dim": 512,
+        "ff_size": 2048,
+        "num_layers": 6,
+        "num_heads": 8,
+        "dropout": 0.0,
+        "concat_parent_features": true,
+        "use_graph_emb": false,
+        "use_depth_emb": true,
+        "use_spectral_rope": true,
+        "max_freqs": 8,
+        "use_signnet": true,
+        "cond_mode": "text",
+        "cond_mask_prob": 0.1,
+        "text_encoder_type": "t5",
+        "text_encoder_version": "google/flan-t5-base",
+        "inject_tpos_to_adaln": true,
+        "num_tpos_queries": 4
+    },
+    "scheduler": {
+        "diffusion_steps": 100
+    },
+    "training": {
+        "batch_size": 24,
+        "seed": 10,
+        "diff_model": "flow",
+        "learning_rate": 0.0001,
+        "weight_decay": 1e-05,
+        "num_steps": 80000,
+        "log_interval": 50,
+        "save_interval": 10000,
+        "lambda_geo": 0.5,
+        "use_ema": true,
+        "ema_decay": 0.9999,
+        "max_grad_norm": 1.0,
+        "warmup_ratio": 0.03,
+        "min_lr_ratio": 0.05,
+        "balanced": true
+    },
+    "sampling": {
+        "num_samples": 3,
+        "num_repetitions": 3,
+        "cfg_scale": 3.0
+    }
+}

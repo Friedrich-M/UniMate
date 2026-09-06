@@ -13,7 +13,10 @@
 # envs ship setuptools >= 81 too); the pin below keeps it from upgrading.
 #
 # Only direct dependencies are listed; everything else (CUDA runtime libs,
-# tokenizers, HTTP stack, ...) is resolved transitively by pip.
+# tokenizers, HTTP stack, ...) is resolved transitively by pip. Versions are
+# pinned to the combination this project is developed and tested against;
+# `mathutils` / `bmesh` need no line of their own (they ship inside the bpy
+# wheel), nor does `mpl_toolkits` (inside matplotlib).
 
 # PyTorch cu124 wheels (torch / torchvision "+cu124" pins below)
 --extra-index-url https://download.pytorch.org/whl/cu124
@@ -25,6 +28,9 @@ setuptools<81                   # keeps pkg_resources available (Motion build)
 # ── Core / training ──────────────────────────────────────────────────────────
 numpy==2.2.6
 torch==2.5.1+cu124
+# Pulled in by the CLIP text encoder (clip/clip.py imports torchvision.transforms
+# at module load). Pinned to the matching +cu124 build so pip cannot resolve a
+# torchvision compiled against a different torch/CUDA and drag torch with it.
 torchvision==0.20.1+cu124
 torch-geometric==2.7.0          # GCN graph embedding (use_graph_emb)
 torchdiffeq==0.2.5              # ODE/SDE integrators for flow matching
@@ -36,16 +42,28 @@ tensorboard==2.20.0             # training logs (SummaryWriter)
 transformers==5.16.1            # T5/BERT text encoders; local Qwen3-VL captioner needs >=4.57, Qwen3.5 (qwen3_5 arch) needs 5.x
 sentencepiece==0.2.1            # T5 tokenizer backend
 clip @ git+https://github.com/openai/CLIP.git   # CLIP text encoder
-spacy                           # T5 conditioner text normalization
-num2words                       # number → word expansion in text normalization
-openai                          # OpenAI-compatible backends (captioning; DeepSeek/GPT joint annotation)
-google-genai                    # Gemini caption backend ("from google import genai")
+# spaCy must stay on the 3.8 line: the model wheel below is built for it and a
+# 3.9/4.x resolution would install a spaCy that cannot load it.
+spacy>=3.8,<3.9                 # T5 conditioner text normalization
+# spaCy language model. Listing it here keeps offline compute nodes working:
+# the code's spacy.cli.download fallback needs internet access.
+en-core-web-sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl
+num2words==0.5.14               # number → word expansion in text normalization
+openai==3.3.1                   # OpenAI-compatible backends (captioning; DeepSeek/GPT joint annotation)
+google-genai==2.19.0            # Gemini caption backend ("from google import genai")
 
 # OPTIONAL — fused attention for the local Qwen3-VL captioner. The loader
 # falls back to SDPA when absent, and the prebuilt wheels only exist for a
 # few exact torch/CUDA/Python combinations (a source build takes an hour+),
 # so it is not installed by default:
 #   pip install flash-attn==2.7.4.post1 --no-build-isolation
+
+# ── Hugging Face Hub ─────────────────────────────────────────────────────────
+# Also a transformers dependency, but listed on its own because the download
+# stage shells out to the `hf` CLI this package installs
+# (data_process/scripts/run_download.sh). The standalone installer at
+# https://hf.co/cli/install.sh works too if you prefer it outside the env.
+huggingface_hub==1.29.0
 
 # ── Motion / animation library (Holden-style Animation / Quaternions /
 #    InverseKinematics; used across data_process/) ───────────────────────────
@@ -67,5 +85,5 @@ pillow==12.2.0
 # ── CLI / logging ────────────────────────────────────────────────────────────
 tyro==1.0.12                    # config + CLI overrides
 rich==14.3.3
-loguru
+loguru==0.7.3
 tqdm==4.67.3
