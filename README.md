@@ -3,8 +3,9 @@
 <p align="center"><b>One Unified Model to Animate Diverse Skeletons</b></p>
 
 <p align="center">
-  <a href="https://linzhanm.github.io/unimate/"><img alt="Project Page" src="https://img.shields.io/badge/Project_Page-6D28D9?style=for-the-badge&logo=githubpages&logoColor=white"></a>
-  <a href="https://linzhanmou.com/unimate/resources/unimate.pdf"><img alt="Paper" src="https://img.shields.io/badge/Paper-A855F7?style=for-the-badge&logo=googledocs&logoColor=white"></a>
+  <a href="https://linzhanmou.com/unimate/"><img alt="Project Page" src="https://img.shields.io/badge/Project_Page-6D28D9?style=for-the-badge&logo=githubpages&logoColor=white"></a>
+  <a href="https://arxiv.org/abs/2609.05415"><img alt="arXiv" src="https://img.shields.io/badge/arXiv-2609.05415-B31B1B?style=for-the-badge&logo=arxiv&logoColor=white"></a>
+  <a href="https://huggingface.co/papers/2609.05415"><img alt="Hugging Face Paper" src="https://img.shields.io/badge/Paper-FFD21E?style=for-the-badge&logo=huggingface&logoColor=000000"></a>
   <a href="https://linzhanmou.com/unimate/interactive.html"><img alt="Interactive Demo" src="https://img.shields.io/badge/Interactive_Demo-0EA5E9?style=for-the-badge&logo=threedotjs&logoColor=white"></a>
   <a href="https://huggingface.co/collections/Linzhan/unimate"><img alt="Hugging Face Dataset" src="https://img.shields.io/badge/Dataset-FFD21E?style=for-the-badge&logo=huggingface&logoColor=000000"></a>
   <a href="https://linzhanmou.com/unimate/resources/unimate-poster.png"><img alt="SIGGRAPH Asia 2026 Poster" src="https://img.shields.io/badge/SIGGRAPH_Asia_2026-Poster-6D28D9?style=for-the-badge&labelColor=1E1B4B"></a>
@@ -31,6 +32,7 @@
 ## 🔥 News
 
 - **[2026-09-06]** The **training and inference code** is released. 🚀
+- **[2026-09-04]** Our paper is on [arXiv](https://arxiv.org/abs/2609.05415) and [Hugging Face Papers](https://huggingface.co/papers/2609.05415). 📄
 - **[2026-08-30]** The raw **UniML3D dataset** and its [data-processing pipeline](data_process/) are released. 🚀
 - **[2026-08-01]** Our [Interactive Demo](https://linzhanmou.com/unimate/interactive.html) is live — browse our animation results in 3D. 🎮
 - **[2026-07-18]** UniMate is accepted to SIGGRAPH Asia 2026! 🎉
@@ -300,10 +302,13 @@ If you find UniMate useful in your research, please consider citing our work:
 
 ```bibtex
 @inproceedings{mou2026unimate,
-  title={UniMate: One Unified Model to Animate Diverse Skeletons},
-  author={Mou, Linzhan and Lei, Jiahui and Dou, Zhiyang and Cai, Chenyue and Song, Chaoyue and Finkelstein, Adam and Rusinkiewicz, Szymon},
-  booktitle={SIGGRAPH Asia 2026},
-  year={2026}
+  title         = {UniMate: One Unified Model to Animate Diverse Skeletons},
+  author        = {Mou, Linzhan and Lei, Jiahui and Dou, Zhiyang and Cai, Chenyue and Song, Chaoyue and Finkelstein, Adam and Rusinkiewicz, Szymon},
+  booktitle     = {SIGGRAPH Asia 2026 Conference Papers},
+  year          = {2026},
+  eprint        = {2609.05415},
+  archivePrefix = {arXiv},
+  url           = {https://arxiv.org/abs/2609.05415}
 }
 ```
 
