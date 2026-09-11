@@ -34,7 +34,7 @@ using another.
 Usage (from the repo root)::
 
     # every dataset/features/* with the config's encoder
-    python -m unimate.tools.precompute_text_emb --config configs/uniml3d_90frames.json
+    python -m unimate.tools.precompute_text_emb --config configs/uniml3d_60frames_graph_adaln.json
 
     # one input folder (positional or --input_dir), encoder given explicitly
     python -m unimate.tools.precompute_text_emb --input_dir dataset/features/truebones \\

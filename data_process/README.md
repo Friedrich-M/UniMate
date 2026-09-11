@@ -1,8 +1,8 @@
 # UniML3D Data Processing
 
-The pipeline that turns raw rigged assets (Truebones FBX, Mixamo FBX, Objaverse GLB) into **UniML3D** — the text-paired, topology-annotated motion clips used to train UniMate.
+The pipeline that turns raw rigged assets (Truebones FBX, Mixamo FBX, Objaverse GLB) into **[UniML3D](https://huggingface.co/datasets/Linzhan/UniML3D)** — the text-paired, topology-annotated motion clips used to train UniMate.
 
-**How to read this document.** All commands are run **from the repository root**. Each stage lists the commands you need first; the collapsible **Details / Advanced / Reference** blocks hold the knobs, mechanics, and field tables. Every wrapper also prints its own usage with `-h`.
+**How to read this document.** All commands are run **from the repository root**. Each stage lists the commands you need first; the collapsible **Details / Reference** blocks hold the knobs and field tables. Every wrapper also prints its own usage with `-h`.
 
 ## Table of Contents
 
@@ -27,16 +27,7 @@ The pipeline that turns raw rigged assets (Truebones FBX, Mixamo FBX, Objaverse 
 ## Overview
 
 ```mermaid
-%%{init: {
-  "theme": "base",
-  "themeVariables": {
-    "fontFamily": "-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif",
-    "fontSize": "14px",
-    "lineColor": "#94A3B8",
-    "edgeLabelBackground": "#F1F5F9"
-  },
-  "flowchart": { "curve": "basis", "nodeSpacing": 40, "rankSpacing": 60 }
-}}%%
+%%{init: {"theme": "base", "themeVariables": {"fontFamily": "-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif", "fontSize": "14px", "lineColor": "#94A3B8", "edgeLabelBackground": "#F1F5F9"}, "flowchart": {"curve": "basis", "nodeSpacing": 40, "rankSpacing": 60}}}%%
 flowchart LR
     raw(["📦 raw FBX / GLB"])
     export("<b>1 · Export</b><br/>Blender → NPZ")
@@ -94,14 +85,12 @@ The pipeline uses the shared `unimate` conda environment — see [Environment Se
 
 | Tool | Used by |
 |------|---------|
-| [Blender](https://www.blender.org/) on `PATH` | stages 1 & 5 (headless `blender -b -P`) |
-| pip [`bpy`](https://pypi.org/project/bpy/) module (in the conda env) | stage 2a (EEVEE needs the module's GPU context) |
+| [Blender](https://www.blender.org/) on `PATH` | stages 1 & 5 (headless `blender -b -P`; developed against 3.2) |
+| pip [`bpy`](https://pypi.org/project/bpy/) module (in the conda env) | stage 2a — pinned to `bpy==4.0.0`, the last release for Python 3.10; EEVEE needs the module's GPU context, so this stage does *not* run under `blender -b` |
 | `ffmpeg` | video previews — bundled by `imageio-ffmpeg` from `requirements.txt`; no system install needed |
 | [`hf` CLI](https://hf.co/cli) | stage 0 — installed with the env's `huggingface_hub` |
 | CUDA GPU | stages 2a & 2b (and stage 3 when a local LLM is used) |
 | `OPENAI_API_KEY` / `GOOGLE_API_KEY` / `DEEPSEEK_API_KEY` | stage 2b (OpenAI / Gemini captioning) and stage 3 (DeepSeek / OpenAI joint annotation) API backends |
-
-The two Blender surfaces are independent. Stages 1 and 5 run under a standalone Blender's bundled interpreter (`blender -b -P script.py -- args`) — developed against Blender 3.2. Stage 2a runs under the `bpy` wheel installed into the conda env, pinned to `bpy==4.0.0` in `requirements.txt`: it is the last release built for Python 3.10, and 4.2+ changes the EEVEE API the render helpers use.
 
 ## Directory Layout
 
@@ -131,14 +120,9 @@ dataset/render/<dataset>_tpose/             T-pose 2x2 grids (category input)
 dataset/features/<dataset>/                 stage-4 training clips + cond.npy
 ```
 
-`<dataset>` is one of `truebones`, `mixamo`, `objaverse`. For the full file-by-file contents of an export directory, see [Reference — files in `dataset/export/<dataset>/`](#data-formats).
+`<dataset>` is one of `truebones`, `mixamo`, `objaverse`. For the file-by-file contents of an export directory, see [Reference — files in `dataset/export/<dataset>/`](#data-formats).
 
-<details>
-<summary><b>Details —</b> why <code>dataset/render/</code> is a set of symlinks</summary>
-
-Both `dataset/render/` paths are symlinks into the dataset's own Hub mirror, so renders sit beside the assets they came from and upload with them — `truebones` → `raw/truebones/{animation_render,species_tpose}`, `mixamo` → `raw/mixamo/{animation_motion_render,character_tpose}`, `objaverse` → `raw/objaverse_renders/{glb_render,tpose}`. Objaverse keeps its renders in a separate repo because there are 10,355 clip folders.
-
-</details>
+Both `dataset/render/` paths are symlinks into each dataset's own Hub mirror, so renders sit beside the assets they came from: `truebones` → `raw/truebones/{animation_render,species_tpose}`, `mixamo` → `raw/mixamo/{animation_motion_render,character_tpose}`, `objaverse` → `raw/objaverse_renders/{glb_render,tpose}` (a separate repo, because there are 10,355 clip folders).
 
 ## Getting the Raw Data
 
@@ -158,7 +142,17 @@ bash data_process/scripts/run_download.sh objaverse_renders   # → dataset/raw/
 | `truebones` | [Linzhan/Truebones-ZOO-Annotations](https://huggingface.co/datasets/Linzhan/Truebones-ZOO-Annotations) (prompts, metadata, renders, build scripts — no motion files) |
 | `objaverse_renders` | [Linzhan/Objaverse-XL-Rigged-Animated-Renders](https://huggingface.co/datasets/Linzhan/Objaverse-XL-Rigged-Animated-Renders) (four-view clip MP4s + T-pose grids; download-only companion, not a pipeline dataset name) |
 
-The Mixamo and Truebones repos also carry the stage-2a multi-view renders as per-view MP4 previews plus camera JSONs (`animation_motion_render/`, `animation_render/` — see each repo's README). The per-frame PNGs the caption stage reads are not hosted; stage 2a regenerates them (or extract stills from the MP4s).
+The Mixamo and Truebones repos also carry the stage-2a renders as per-view MP4 previews plus camera JSONs. The per-frame PNGs the caption stage reads are not hosted; stage 2a regenerates them.
+
+> [!TIP]
+> **You may not need to run stages 1-3 at all.** Their combined output is published as [Linzhan/UniML3D](https://huggingface.co/datasets/Linzhan/UniML3D), so stage 4 on its own reproduces the training clips:
+>
+> ```bash
+> hf download Linzhan/UniML3D --type dataset --local-dir dataset --include "export/*"
+> bash data_process/scripts/run_extract_features.sh objaverse
+> ```
+>
+> The Truebones motion NPZs are held back there for the licensing reason below; everything else, including all captions and annotations, is included.
 
 > [!IMPORTANT]
 > **The Truebones motion files are not downloadable from us.** The Truebones ZOO animal pack is a commercial product whose license does not allow redistribution, so its repo ships annotations only. Purchase the pack from [Truebones](https://truebones.com) and rebuild the per-clip layout as described below.
@@ -239,12 +233,12 @@ Each export directory receives:
 | `motions/{clip}.npz` | one NPZ per clip (see [Data Formats](#data-formats)) |
 | `videos/{clip}.mp4`, `tpose/{name}.png` | skeleton preview per clip and rest-pose still per asset (skip with `--no-vis`) |
 | `joint_names.json` | `{asset: [pruned bone names]}` — the input of stage 3 |
-| `joint_count.json`, `clip_frames.json`, `summary.json` | joints per skeleton, frames per clip, dataset-level summary (plotted by `tools/vis_joint_count.py` / `tools/vis_clip_frames.py`) |
+| `joint_count.json`, `clip_frames.json`, `summary.json` | joints per skeleton, frames per clip, dataset-level summary |
 | `.completed/{asset}.json` | per-asset completion markers; delete one to force a re-export |
 
-`--multi-worker N` shards a *directory* input over N Blender processes (objaverse, mixamo, auto mode). Each worker writes its own `*_worker{i}.json` summary shards, and the wrapper merges them into the canonical files afterwards with `tools/merge_summaries.py`. Truebones is exported by a single-process exporter and ignores `--multi-worker` (with a warning).
+`--multi-worker N` shards a *directory* input over N Blender processes (objaverse, mixamo, auto mode). Each worker writes its own `*_worker{i}.json` summary shards, merged afterwards by `tools/merge_summaries.py`. Truebones is exported by a single-process exporter and ignores `--multi-worker`.
 
-Skeleton pruning is joint across all of an asset's clips, so an asset only completes atomically — the marker is written once every clip of that asset is on disk (including assets that legitimately yield no clips, recorded as `status="skipped"`). Markers also carry the pruned joint names, which is what makes `joint_names.json` rebuildable from disk after an interrupted run.
+Skeleton pruning is joint across all of an asset's clips, so an asset only completes atomically — the marker is written once every clip of that asset is on disk. Markers also carry the pruned joint names, which is what makes `joint_names.json` rebuildable from disk after an interrupted run.
 
 </details>
 
@@ -260,16 +254,15 @@ bash data_process/scripts/run_render_tpose.sh objaverse
 DATA_DIR=outputs/mixamo_characters bash data_process/scripts/run_render_motion.sh mixamo
 ```
 
-Each clip becomes `<clip>/v00{0..3}/*.png` (the per-frame PNGs the caption stage reads) plus a composed `<clip>/v00{0..3}.mp4` per view (`--no-video` to skip). Render folders use the same clip naming as stage 1, so they line up with the exported NPZs. Stage 2a runs with plain `python` and the pip `bpy` module rather than `blender -b`, because EEVEE needs the module's GPU context.
+Each clip becomes `<clip>/v00{0..3}/*.png` (the per-frame PNGs the caption stage reads) plus a composed `<clip>/v00{0..3}.mp4` per view (`--no-video` to skip). Render folders use the same clip naming as stage 1, so they line up with the exported NPZs.
 
 <details>
-<summary><b>Details —</b> frame cap, fps consistency, render settings, multi-GPU</summary>
+<summary><b>Details —</b> frame cap, fps consistency, multi-GPU</summary>
 
 - **Frame cap.** Rendering stops at the first 200 frames per clip (`MAX_RENDER_FRAMES`, ~6.7 s at 30 fps) — enough context for captioning without paying for full-length renders. Clips shorter than `MIN_ACTION_FRAMES` (default 5) are skipped.
 - **`--fps` must match stage 1.** glTF stores keyframe times in seconds, so the importer resamples them at the scene frame rate; a mismatch makes the renders cover a different time window than the NPZs. Default 30 in both stages.
-- **Quality knobs.** `RESOLUTION` (512), `SAMPLES` (64), `CAMERA_DIST` (1.5) are environment overrides on both wrappers.
-- **Resume.** Rerunning re-renders only what is missing. `--missing-only` (objaverse renderer only) additionally skips whole GLBs whose every action is already complete, which avoids re-importing them.
-- **Multi-GPU.** `--multi-worker N` shards assets over N processes; with `NUM_GPUS>1` the workers are spread round-robin over the visible GPUs. The `CUDA_VISIBLE_DEVICES` pinning does **not** bind EEVEE's EGL context, so on a shared multi-GPU machine every worker still renders on the first GPU — give each render job a cgroup / scheduler allocation that exposes exactly one GPU instead.
+- **Multi-GPU.** `--multi-worker N` shards assets over N processes. `CUDA_VISIBLE_DEVICES` pinning does **not** bind EEVEE's EGL context, so on a shared multi-GPU machine every worker still renders on the first GPU — give each render job a cgroup / scheduler allocation that exposes exactly one GPU instead.
+- Quality knobs (`RESOLUTION`, `SAMPLES`, `CAMERA_DIST`) are environment overrides on both wrappers; run either with `-h`.
 
 </details>
 
@@ -296,36 +289,24 @@ Both write into the export directory next to the stage-1 output:
 | `motion_captions.json` | `{clip: caption}` — one short caption per clip |
 | `motion_captions_failed.txt` | clips that failed or whose renders were incomplete; retried on the next run |
 | `category_groups.json` | `{category: [assets]}` over `bipedal`, `quadrupedal`, `insectoid`, `avian`, `marine`, `serpentine`, `articulated_rigid`, plus an `uncertain` bucket |
-| `category_groups_review.json` | per asset: votes, confidence and the evidence the model cited |
-| `category_groups_errors.json` | assets whose retries were exhausted; retried on the next run |
+| `category_groups_review.json`, `category_groups_errors.json` | per-asset votes and evidence; assets whose retries were exhausted |
 
 Clips whose renders are incomplete are recorded as failures rather than captioned from a partial set. Mixamo is a single shared humanoid rig, so its wrapper writes `category_groups.json` directly instead of classifying.
 
 <details>
-<summary><b>Details —</b> caption backends, parallelism, and model inputs</summary>
+<summary><b>Details —</b> backends, parallelism, and what the models see</summary>
 
-- **Backend selection.** A `MODEL` containing `qwen` runs locally through HuggingFace transformers; `gemini*` uses the Gemini API; anything else is treated as an OpenAI-compatible model (`BASE_URL` points it at a proxy). The local default is `Qwen/Qwen3.5-9B`; `MODEL=Qwen/Qwen3.8-27B` selects the 27B model (same architecture and settings, about 56 GB in bf16, so one 80 GB GPU) and `MODEL=Qwen/Qwen3-VL-8B-Instruct` the older Qwen3-VL.
-- **Parallelism.** `--multi-gpu` applies to the local backend only: one process per visible GPU writes a shard file, and the wrapper merges the shards into `motion_captions.json` when all of them succeed. API backends scale with `NUM_WORKERS` concurrent requests instead.
-- **What the model sees.** The local backend receives each clip's four camera views as native video at the render frame rate (`--vision_input video`, the default). API backends receive frame sequences, uniformly sampled down to `--max_frames_per_view` with the first and last frame always kept.
-- **Reference hints.** For mixamo and truebones the official catalogue prompts (`animation_motion_prompts.json` / `animation_prompts.json`) are attached as frame-grounded hints automatically; `HINTS_JSON` overrides the file, `HINTS_JSON=""` disables hints.
-
-</details>
-
-<details>
-<summary><b>Details —</b> body-plan classification</summary>
-
-Per asset, `vlm_caption/classify_category.py` shows the model four kinds of evidence: the four T-pose views from `dataset/render/<dataset>_tpose/`; the first frame of one clip from the same four cameras (a rest pose can lie flat on the ground, so the natural stance matters); skeleton facts derived from the export directory (joint count, grounded limb chains, cleaned-label histogram, body extents); and up to `--max_captions` of the asset's motion captions.
-
-It answers with a small JSON object carrying evidence fields, a category and a confidence. `VOTES` (default 3) sampled answers are majority-voted; a tie, a low-confidence majority or the model's own `uncertain` verdict lands in the `uncertain` bucket for review instead of being silently mis-filed. Unparseable answers (`unknown`) are always re-attempted on the next run; `--retry_uncertain` also re-attempts the uncertain bucket.
-
-Hand corrections belong in the patch directory as `<dataset>_categories.json` (applied by `tools/patch_annotations.py`). `tools/eval_category_groups.py` scores a run against `vlm_caption/eval/truebones_category_truth.json`, or diffs two runs against each other.
+- **Backend selection.** A `MODEL` containing `qwen` runs locally through HuggingFace transformers; `gemini*` uses the Gemini API; anything else is treated as an OpenAI-compatible model (`BASE_URL` points it at a proxy). The local default is `Qwen/Qwen3.5-9B`; `MODEL=Qwen/Qwen3.8-27B` selects the 27B model (≈56 GB in bf16, so one 80 GB GPU).
+- **Parallelism.** `--multi-gpu` applies to the local backend only: one process per visible GPU writes a shard file, merged into `motion_captions.json` when all of them succeed. API backends scale with `NUM_WORKERS` concurrent requests instead.
+- **Caption inputs.** The local backend receives each clip's four camera views as native video at the render frame rate; API backends receive frame sequences sampled down to `--max_frames_per_view`. For mixamo and truebones the official catalogue prompts are attached as frame-grounded hints (`HINTS_JSON=""` disables them).
+- **Category inputs.** Per asset, `classify_category.py` shows four T-pose views, the first frame of one clip from the same four cameras (a rest pose can lie flat, so the natural stance matters), skeleton facts (joint count, grounded limb chains, label histogram, body extents) and up to `--max_captions` motion captions. `VOTES` (default 3) sampled answers are majority-voted; a tie, a low-confidence majority or the model's own `uncertain` verdict lands in the `uncertain` bucket instead of being silently mis-filed. Hand corrections go in `<dataset>_categories.json` in the patch directory; `tools/eval_category_groups.py` scores a run against a truth set.
 
 </details>
 
 <details>
-<summary><b>Advanced —</b> rewriting captions that name props</summary>
+<summary><b>Details —</b> rewriting captions that name props</summary>
 
-Nothing but the body is rendered, yet a catalogue hint such as *Rifle Run Left* can leak a prop or scenery word into a caption. `caption_rewrite_llm.py` finds those captions with a word list, asks a text LLM to rewrite each into body-only wording (`aims a rifle` → `extends one arm forward as if aiming`), validates the answer (no prop word, subject preserved, one short sentence) and writes a patch JSON that `tools/patch_annotations.py` applies after review — nothing is modified in place:
+Nothing but the body is rendered, yet a catalogue hint such as *Rifle Run Left* can leak a prop or scenery word into a caption. `caption_rewrite_llm.py` finds those with a word list, asks a text LLM to rewrite each into body-only wording (`aims a rifle` → `extends one arm forward as if aiming`), validates the answer and writes a patch JSON that `tools/patch_annotations.py` applies after review — nothing is modified in place:
 
 ```bash
 python data_process/vlm_caption/caption_rewrite_llm.py \
@@ -349,37 +330,28 @@ bash data_process/scripts/run_joints_face_select_llm.sh objaverse      # → fac
 Rigs that fell back to the rules are listed in `failed_clean_names.txt` / `failed_face_joints.txt` next to the outputs, so a refinement pass can be restricted to them.
 
 <details>
-<summary><b>Advanced —</b> optional refinement passes</summary>
+<summary><b>Details —</b> refinement passes, rule variants, and QA visualizers</summary>
 
-Skip these on a clean LLM run; reach for them when the required passes recorded failures or when spot checks reveal residual label / pairing errors:
+Skip the refinement passes on a clean LLM run; reach for them when the required passes recorded failures or when spot checks reveal residual errors. Both edit in place, create a `.bak` sibling on first run, and list rigs they still could not fix in `still_*` text files.
 
 ```bash
 bash data_process/scripts/run_joints_names_correct_llm.sh objaverse    # re-check every label, correct in place
 bash data_process/scripts/run_joints_face_correct_llm.sh objaverse     # retry rigs whose facing pair came back "empty"
 ```
 
-`names_correct_llm` sends each `{raw, current}` label pair back to the LLM to keep or fix — most useful for rigs that fell back to the rules (restrict with `FAILED_LIST=.../failed_clean_names.txt`; long rigs are chunked with the full rig attached as read-only context). `face_correct_llm` re-attempts only `source == "empty"` entries by default, with a correction prompt, no rule hint, and a larger reasoning budget; pass `--force_reattempt` to also retry the rule-fallback rigs in `failed_face_joints.txt`. Only a clean non-empty LLM answer replaces an existing entry. Both edit in place, create a `.bak` sibling on first run, and list rigs they still could not fix in `still_*` text files.
+`names_correct_llm` sends each `{raw, current}` label pair back to the LLM to keep or fix (restrict with `FAILED_LIST=.../failed_clean_names.txt`). `face_correct_llm` re-attempts only `source == "empty"` entries by default; `--force_reattempt` also retries the rule-fallback rigs. Both cleaners write the same `clean_joint_names.json`, so the LLM pass skips rigs the rule pass already filled in (`--overwrite` / `--redo_failed`).
 
-Both cleaners write the same `clean_joint_names.json`, so the LLM pass skips rigs the rule-based pass already filled in; pass `--overwrite` to redo everything or `--redo_failed` to redo only the rigs listed in `failed_clean_names.txt`.
-
-</details>
-
-<details>
-<summary><b>Advanced —</b> rule-based variants and QA visualizers</summary>
-
-Pure rule-based variants exist as `run_joints_names_clean_rule.sh` / `run_joints_face_select_rule.sh` (no API needed — useful offline or as a fast first pass; the LLM variants use them as hint and fallback).
+Pure rule-based variants exist as `run_joints_names_clean_rule.sh` / `run_joints_face_select_rule.sh` — no API needed, and the LLM variants use them as hint and fallback.
 
 Three visualizers check a facing pair by eye:
 
 ```bash
-bash data_process/scripts/run_joints_vis_tpose.sh <dataset>            # annotated T-pose PNG per skeleton
+bash data_process/scripts/run_joints_vis_tpose.sh <dataset>            # one annotated PNG per skeleton, every joint labeled
 bash data_process/scripts/run_joints_vis_facing.sh <dataset>           # rest pose vs. canonicalized pose
 python -m data_process.tools.vis_motion <motion.npz> --direction face --face-joints I J
 ```
 
-- `run_joints_vis_tpose.sh` renders one PNG per unique skeleton with every joint labeled, into `<export_dir>/face_joints_vis/` (`LIMIT=N` to stop early).
-- `run_joints_vis_facing.sh` runs the stage-4 canonicalization on every rest pose and saves a side-by-side `[original rest pose with the pair marked (r red, l blue) and its forward arrow | the same pose corrected by the pair, facing +Z]` per skeleton under `outputs/tpose_facing_vis/<dataset>/`, plus a `facing_summary.tsv` flagging `COINCIDENT` pairs (both joints on the midline in the rest pose and at frame 0 — pick another pair), `REST-DEGENERATE` rest poses (the pair is lateral at frame 0 but not in the rest pose: the exported rest pose lies on its side, so the stage-4 T-pose facing is unreliable) and `UNRESOLVED` names. `FACE_JSON=<patch_dir>/<ds>_face_pairs.json` previews a patch before applying it.
-- `vis_motion.py` renders an MP4 of an exported clip with the heading arrow the pair implies.
+`run_joints_vis_facing.sh` runs the stage-4 canonicalization on every rest pose and saves a side-by-side `[rest pose with the pair marked and its forward arrow | the same pose corrected, facing +Z]` under `outputs/tpose_facing_vis/<dataset>/`, plus a `facing_summary.tsv` flagging `COINCIDENT` pairs (both joints on the midline — pick another pair), `REST-DEGENERATE` rest poses (lateral at frame 0 but not in the rest pose: the exported rest pose lies on its side, so the stage-4 T-pose facing is unreliable) and `UNRESOLVED` names. `FACE_JSON=<patch_dir>/<ds>_face_pairs.json` previews a patch before applying it.
 
 </details>
 
@@ -396,37 +368,26 @@ Applies the corrections found in a manual audit of the stage-2/3 outputs, so the
 
 | Fix | Effect |
 |-----|--------|
-| Pelvis unification | unsided `Pelvis` / `Hip` → `Hips` (one label for the root pelvis bone; `Left Hip` / `Right Hip` untouched) |
+| Pelvis unification | unsided `Pelvis` / `Hip` → `Hips` (`Left Hip` / `Right Hip` untouched) |
 | Numeric labels | pass-through labels (`_2`, `_1045`) → `Bone` |
 | Arthropod chains | numbered leg / claw-arm chains get anatomical positions (Thigh, Shin, Foot, Toe … / Upper Arm, Forearm, Hand, Claw) instead of `Leg` repeated along the chain |
 | Duplicate sides | rigs whose second side is a Blender/Maya duplicate (`LeftUpLeg.001`, `Leg_L1`, …) get side prefixes from the rest-pose X coordinate |
 | Face resync | the `clean` fields of `face_joint_names.json` are re-synced against the labels |
-| Captions | grammar and subject fixes, plus locomotion qualifiers grounded in the root trajectory (`walks forward` with no root travel → `walks in place`; `runs in place` with clear travel along the facing axis → `runs forward\|backward`) |
+| Captions | grammar and subject fixes, plus locomotion qualifiers grounded in the root trajectory (`walks forward` with no root travel → `walks in place`) |
 
 **Hand overrides** are read from `--patch_dir` (default `dataset/UniML3D/patches/`) as `<dataset>_{joint_labels,face_pairs,captions,categories}.json`. Missing files are skipped, so the rule fixes apply on their own.
 
 **Skip lists** the patch writes into the export directory for stage 4:
 
-| Output | Scope | Source |
-|--------|-------|--------|
-| `export/<ds>/filtered_clips.txt` | individual clips, any dataset | `<ds>_filtered_clips.txt` in the patch dir |
-| `export/objaverse/filtered_objects.txt` | whole rigs, objaverse only | the `tpose_wrong` entries of `objaverse_rig_flags.txt` |
-| `export/objaverse/rig_flags.json` | informational | automatic facing checks + hand review |
+| Output | Scope |
+|--------|-------|
+| `export/<ds>/filtered_clips.txt` | individual clips, any dataset |
+| `export/objaverse/filtered_objects.txt` | whole rigs — only the `tpose_wrong` flag (rest pose lies flat / rotated / upside-down) |
+| `export/objaverse/rig_flags.json` | informational: `empty_pair`, `bone_pair`, `body_axis_unnamed`, `facing_wrong`, `object_no_front` |
 
-Objaverse rig flags, and whether stage 4 acts on them:
+Everything except `tpose_wrong` is informational — those rigs are kept and trained with the facing they have. Per-rig evidence (rest-pose metrics, mesh T-pose grids and corrected-skeleton panels, all checked by eye) lives under `export/objaverse/tpose_abnormal_vis/`.
 
-| Flag | Meaning | Filtered out |
-|------|---------|--------------|
-| `tpose_wrong` | the exported rest pose lies flat / is rotated / upside-down | **yes** |
-| `empty_pair` | no bilateral pair could be found | no |
-| `bone_pair` | the pair is two unnamed `Bone` joints | no |
-| `body_axis_unnamed` | the body axis runs through unnamed bones | no |
-| `facing_wrong` | the pair does not give the real front | no |
-| `object_no_front` | a prop with no meaningful front | no |
-
-Everything except `tpose_wrong` is informational — those rigs are kept and trained with the facing they have. The per-rig evidence (rest-pose metrics, mesh T-pose grids and corrected-skeleton panels, all checked by eye) lives under `export/objaverse/tpose_abnormal_vis/`: one `[mesh rest-pose grid | rest pose with pair | corrected T-pose]` PNG per flagged rig, grouped by category, plus a TSV.
-
-Truebones uses `filtered_clips.txt` for the three clips whose rig disagrees with their object's reference skeleton (`Monkey-B01_Die` has 79 joints against the object's 85; `KingCobra-Run` and `KingCobra-Walk_Fast` carry the hood joints `BN__Neck_{L,R}_01` mirrored across Z relative to the `KingCobra-Attack` T-pose); objaverse uses it for the motion-discontinuity review.
+Truebones uses `filtered_clips.txt` for the three clips whose rig disagrees with their object's reference skeleton; objaverse uses it for the motion-discontinuity review.
 
 </details>
 
@@ -453,48 +414,26 @@ Every object type is canonicalized against its T-pose (facing → XZ-centering �
 | `--max_clip_len` | 200 | frames kept per motion; without `APPLY_CLIP` only the first 200 frames survive |
 | `APPLY_CLIP=1` (`--apply_clip`) | off | crop long motions into overlapping windows of `max_clip_len` frames with stride `max_clip_len − diffusion_max_len` (200 − 90 = 110), so every training crop of up to `--diffusion_max_len` frames fits inside some saved clip |
 | `--activity_threshold` | 0.02 | minimum joint activity (temporal spread at canonical scale) for a clip to be kept |
-| `--jump_step_threshold` | 0.20 | discontinuity filter: a clip is dropped when one frame moves the skeleton at least this many body lengths **and** the step is at least `--jump_ratio_threshold` times the clip's median (a sequence stitched from several actions, or a teleporting root); `0` disables it |
+| `--jump_step_threshold` | 0.20 | discontinuity filter: a clip is dropped when one frame moves the skeleton at least this many body lengths **and** the step is at least `--jump_ratio_threshold` times the clip's median; `0` disables it |
 | `--jump_ratio_threshold` | 8.0 | max/median per-frame joint displacement required alongside `--jump_step_threshold` |
-| `--static_threshold` | 1e-5 | per-frame max-joint displacement below which a frame counts as static; leading / trailing static frames are trimmed |
+| `--static_threshold` | 1e-5 | per-frame displacement below which a frame counts as static; leading / trailing static frames are trimmed |
 | `--min_frames` | 8 | minimum frame count after trimming |
 | `--target_diameter` | 2.0 | leaf-to-leaf skeleton diameter every object type is scaled to |
 | `--max_freqs` / `--max_path_len` | 8 / 5 | Laplacian eigenvectors per joint and the clamp on topology distances in `cond.npy` |
 
-Clips dropped at runtime and skipped object types are recorded in `filtered_clips.json`; `metadata.txt` reports the dataset totals (clips, frames, duration, max joints, captions), clips and joints per object type, filtered counts and the category breakdown.
+Clips dropped at runtime and skipped object types are recorded in `filtered_clips.json`; `metadata.txt` reports the dataset totals.
+
+Two hand-reviewed skip lists are read from the export directory before any processing, both **optional**: `filtered_clips.txt` (individual clips, every dataset) and `filtered_objects.txt` (whole rigs, objaverse only), both written by `tools/patch_annotations.py`. The matching flags take a path, `"auto"` (the default) or an empty string to disable. `--category_groups` follows the same convention for `category_groups.json`, which this stage only copies through.
 
 </details>
 
 <details>
-<summary><b>Details —</b> optional skip lists and pass-through metadata</summary>
-
-Two hand-reviewed skip lists are read from the export directory before any processing, both **optional** — when the file is absent the run simply proceeds on everything:
-
-| List | Scope | Flag | Written by |
-|------|-------|------|-----------|
-| `filtered_clips.txt` | individual clips; every dataset (applied before clips are grouped into object types) | `--filtered_clips` | `tools/patch_annotations.py` |
-| `filtered_objects.txt` | whole rigs; objaverse only | `--filtered_objects` | `tools/patch_annotations.py` |
-
-Both flags take a path, `"auto"` (the default — look in the data dir) or an empty string to disable; a path that does not exist is warned about and skipped, so a stale override never aborts a run.
-
-`--category_groups` follows the same convention for `category_groups.json`, which this stage only copies through to the feature dir. Pass an empty string while the stage-2 classifier is still running, so a partial file is not written out as if it were complete, then copy the finished file in by hand — nothing else in this stage reads it.
-
-</details>
-
-<details>
-<summary><b>Details —</b> Mixamo core joints, grounding, and previews</summary>
+<summary><b>Details —</b> Mixamo core joints, grounding, previews, and resume</summary>
 
 - **Mixamo** is reduced to a built-in **22-joint humanoid core** (finger chains and End bones dropped) via `--mixamo_core_joints` (default on); pass `--no-mixamo_core_joints` to keep the full 65-joint rig. Truebones and objaverse always use the full skeleton.
 - **Grounding.** Each motion is grounded on its own lowest joint by default; `--use_tpos_ground_height` reuses the T-pose's ground height for every clip of the object type instead. Either way `cond['ground_height']` and `cond['ground_height_mode']` record what was applied.
-- **Previews.** Per-clip MP4s use a ground-plane view — an unbounded checkerboard floor that fades out toward the horizon, a following camera, a contact shadow under the skeleton and a fading root trajectory (`--vis_ground`, default on; `--no-vis_ground` renders the plain cubic view). `NO_VIS=1` skips them entirely.
-
-</details>
-
-<details>
-<summary><b>Details —</b> resume cache and error handling</summary>
-
-Finished object types are cached under `cond_parts/`, so interrupted runs resume where they stopped. The cache is keyed on the clip / threshold / topology settings, on digests of the caption and joint-annotation inputs, **and** on the object's source clip list, so changing any of them (a stage-2/3 rerun, a new QA patch, a clip added to the export or newly listed in `filtered_clips.txt`) re-processes the affected object types instead of silently mixing old and new results. Re-processing an object first deletes the clip NPZs a previous run wrote for it — the training loader enumerates `motions/` rather than `captions.json`, so a dropped clip's file would otherwise still be trained on; previews are only pruned when the run regenerates them (`--vis`), so a later `--no-vis` run keeps the MP4s an earlier one made. Delete `cond_parts/` (or one entry) to force re-processing for any other reason.
-
-Object types that fail are appended to `extract_errors.log`, recorded in `filtered_clips.json`, and skipped without a cache entry, so they are retried on the next run — one bad object never aborts the run.
+- **Previews.** Per-clip MP4s use a ground-plane view with a following camera, contact shadow and fading root trajectory (`--no-vis_ground` for the plain cubic view; `NO_VIS=1` skips them entirely).
+- **Resume.** Finished object types are cached under `cond_parts/`, keyed on the clip / threshold / topology settings, on digests of the caption and joint-annotation inputs, **and** on the object's source clip list — so a stage-2/3 rerun, a new QA patch or an added clip re-processes the affected object types instead of silently mixing old and new results. Re-processing first deletes the clip NPZs a previous run wrote for that object, since the training loader enumerates `motions/` rather than `captions.json`. Object types that fail are appended to `extract_errors.log` and retried next run — one bad object never aborts the run.
 
 </details>
 
@@ -509,32 +448,26 @@ bash data_process/scripts/run_animate_fbx.sh                                   #
 bash data_process/scripts/run_animate_mixamo.sh                                # batch over Mixamo export NPZs (Y Bot)
 ```
 
-`run_animate_motion.sh` accepts both the stage-4 feature NPZ and the `.npy` motion features written by the model's sampler. The character is auto-resolved for truebones / objaverse from the raw asset directories; mixamo needs `CHAR_PATH`.
+`run_animate_motion.sh` accepts both the stage-4 feature NPZ and the `.npy` motion features written by the model's sampler. The character is auto-resolved for truebones / objaverse from the raw asset directories; mixamo needs `CHAR_PATH` (default `character_refined/Y_Bot.fbx`, the rig the animation FBXs are authored on).
 
-<details>
-<summary><b>Details —</b> character resolution and extra bones</summary>
+Armature bones absent from the motion are handled by `--extra_bones_strategy`: `merge` (default) transfers their vertex weights to the nearest kept ancestor and removes them, `remove` deletes the bones and their vertices, `keep` leaves them un-keyed.
 
-For mixamo the character defaults to `character_refined/Y_Bot.fbx` — the rig the animation FBXs are authored on (identical 65-bone skeleton, so no bone reconciliation is needed); `CHAR_PATH` selects a different character. Armature bones absent from the motion are handled by `--extra_bones_strategy`: `merge` (default) transfers their vertex weights to the nearest kept ancestor and removes them, `remove` deletes the bones and their vertices, `keep` leaves them un-keyed.
-
-`run_animate_fbx.sh` needs no export stage at all: it bakes a raw animation clip — or a whole directory of them — onto any character that shares the clips' bone names (the Mixamo convention), e.g. the full library on a different character:
+`run_animate_fbx.sh` needs no export stage at all: it bakes a raw animation clip — or a whole directory of them — onto any character that shares the clips' bone names (the Mixamo convention):
 
 ```bash
 CHAR_PATH=dataset/raw/mixamo/character_refined/Amy.fbx \
     bash data_process/scripts/run_animate_fbx.sh          # → outputs/animated_Amy/*.fbx
 ```
 
-</details>
-
 ## Custom Assets
 
 Nothing in the pipeline is tied to the three datasets. There are three entry points for your own rigged assets, in increasing order of integration.
 
-**1 · Export only** — turn assets into stage-1 NPZs. A single file or a directory of mixed GLB/GLTF/FBX; mesh optional (armature-only FBX works), every pose action becomes a clip. Directory runs support the same `--multi-worker` / marker / summary-shard machinery as the Objaverse exporter.
+**1 · Export only** — turn assets into stage-1 NPZs. A single file or a directory of mixed GLB/GLTF/FBX; mesh optional (armature-only FBX works), every pose action becomes a clip.
 
 ```bash
 bash data_process/scripts/run_export_general.sh my_model.glb
 bash data_process/scripts/run_export_general.sh my_assets/ --multi-worker 8   # → dataset/export/custom
-DATA_DIR=my_assets bash data_process/scripts/run_export.sh                    # same thing via the dataset wrapper's auto mode
 ```
 
 The general exporter uses the same `{asset}-{action}.npz` clip naming as the Objaverse layout, so the later stages run over a custom export by borrowing `objaverse` as the layout name and overriding the paths:
@@ -550,7 +483,7 @@ DATA_DIR=$EXPORT SAVE_DIR=dataset/features/custom \
 
 The dataset argument selects the layout and the per-dataset defaults, not the data — every wrapper validates it against `truebones | mixamo | objaverse`, and each documents the environment variables that redirect its input and output.
 
-**2 · Preprocess one asset for inference** — `run_preprocess_char.sh` runs the real export and extraction stages in-process on a single rigged, animated asset and bakes the result into a self-contained canonical asset:
+**2 · Preprocess one asset for inference** — `run_preprocess_char.sh` runs the real export and extraction stages in-process on a single rigged, animated asset:
 
 ```bash
 CHAR_PATH=asset.glb OUTPUT_DIR=outputs/asset \
@@ -558,7 +491,7 @@ CHAR_PATH=asset.glb OUTPUT_DIR=outputs/asset \
     bash data_process/scripts/run_preprocess_char.sh
 ```
 
-It leaves exactly three deliverables: `<name>_canonical.{glb,fbx}` (the rest-pose asset rebuilt to the canonical T-pose — no animation, canonical joint order stored as a custom property), `cond.npy` (the model-side topology conditioning), and `motions/<clip>.npz` (one motion-feature NPZ per action). `FACE_R` / `FACE_L` name the asset's facing pair (`BODY_AXIS=1` for a head/tail axis on serpentine rigs). An asset **without** any action falls back to a rest-only cond — the export stage's motion-driven pruning needs animations — and writes no `motions/`.
+It leaves exactly three deliverables: `<name>_canonical.{glb,fbx}` (the rest-pose asset rebuilt to the canonical T-pose, joint order stored as a custom property), `cond.npy`, and `motions/<clip>.npz` per action. `FACE_R` / `FACE_L` name the asset's facing pair (`BODY_AXIS=1` for a head/tail axis). An asset **without** any action falls back to a rest-only cond and writes no `motions/`.
 
 **3 · Animate the canonical asset** — a feature-format motion NPZ (generated by the model, or extracted above) then drives it directly, with no `cond.npy` or export NPZ at animate time:
 
@@ -567,7 +500,7 @@ CHAR_PATH=outputs/asset/<name>_canonical.glb ANIM_PATH=<motion.npz-or-directory>
     bash data_process/scripts/run_animate_lbs.sh    # one animated GLB per action
 ```
 
-`animate_lbs` computes FK and Linear Blend Skinning manually in NumPy (Blender only parses the asset; the math is numerically identical to Blender's armature modifier) and exports the animated rigged GLB/FBX through the same path as `animate_npz`; `SAVE=npz,obj` additionally dumps raw deformed vertex sequences / per-frame OBJs. It also accepts stage-1 export NPZs and, with `DATASET_TYPE` / `COND_PATH`, cond-resolved feature NPZs on non-preprocessed assets.
+`animate_lbs` computes FK and Linear Blend Skinning manually in NumPy (Blender only parses the asset; the math is numerically identical to Blender's armature modifier); `SAVE=npz,obj` additionally dumps raw deformed vertex sequences / per-frame OBJs.
 
 ## Data Formats
 
@@ -618,7 +551,7 @@ The motion representation stores per-frame deltas without dividing by the frame 
 | `edge_indexs` | `(2, 2(J−1))` | undirected edge list |
 | `spectral_feats` | `(J, K)` | Laplacian eigenvectors (`K = --max_freqs`) |
 | `kinematic_chains` | list | root-to-leaf joint chains |
-| `scale_factor`, `ground_height`, `ground_height_mode` | scalar | calibration applied to every clip of the type (`ground_height` is `None` in `per_motion` mode) |
+| `scale_factor`, `ground_height`, `ground_height_mode` | scalar | calibration applied to every clip of the type |
 | `face_joint_idxs` | dict | `{r_hip, l_hip, body_axis}` indices of the facing pair (when annotated) |
 | `captions` | dict | `{clip_stem: caption}` for the type's clips (also flattened into `captions.json`) |
 
@@ -632,15 +565,11 @@ The export directory is where every stage before feature extraction accumulates 
 | Path | Stage | Content |
 |------|-------|---------|
 | `motions/{clip}.npz` | 1 | per-clip skeleton animation |
-| `videos/{clip}.mp4` | 1 | per-clip skeleton preview |
-| `tpose/{asset}.png` | 1 | rest-pose still per asset |
+| `videos/{clip}.mp4`, `tpose/{asset}.png` | 1 | per-clip skeleton preview, rest-pose still per asset |
 | `joint_names.json` | 1 | `{asset: [pruned bone names]}` |
-| `joint_count.json` | 1 | `{asset: n_joints}` |
-| `clip_frames.json` | 1 | `{clip: n_frames}` |
-| `summary.json` | 1 | dataset totals (clips, frames, duration, fps) |
+| `joint_count.json`, `clip_frames.json`, `summary.json` | 1 | joints per skeleton, frames per clip, dataset totals |
 | `.completed/{asset}.json` | 1 | resume markers |
-| `motion_captions.json` | 2b | `{clip: caption}` |
-| `motion_captions_failed.txt` | 2b | clips to retry |
+| `motion_captions.json`, `motion_captions_failed.txt` | 2b | `{clip: caption}`, clips to retry |
 | `category_groups.json` | 2b | `{category: [assets]}` |
 | `category_groups_review.json`, `category_groups_errors.json` | 2b | per-asset votes/evidence, exhausted retries |
 | `clean_joint_names.json` | 3 | canonical anatomical labels per rig |
@@ -663,10 +592,8 @@ Standalone utilities in `data_process/tools/`. The QA visualizers have wrappers 
 | `vis_tpose.py` | Annotated T-pose PNG with every joint labeled, per skeleton |
 | `vis_tpose_facing.py` | Rest pose vs. facing-canonicalized pose per skeleton, plus `facing_summary.tsv` |
 | `vis_motion.py` | MP4 of an export clip with a root-anchored heading arrow |
-| `vis_clip_frames.py` | Frames-per-clip distribution figures from `clip_frames.json` (histogram + KDE + survival curve) |
-| `vis_joint_count.py` | Joints-per-skeleton distribution figures from `joint_count.json` (histogram + KDE + cumulative curve; `--pooled` for the all-datasets figure) |
-| `truebones_fbx2glb.py` | Per-clip Truebones FBX → GLB, preserving mesh, armature and the clip's take |
-| `character_fbx2glb.py` | Rigged T-pose character FBX → GLB, animation stripped |
+| `vis_clip_frames.py` / `vis_joint_count.py` | Distribution figures for frames per clip / joints per skeleton. Both default over every `dataset/export/*`, write each dataset's figure beside its JSON, and put the comparison figure under `outputs/{clip_frames,joint_count}_vis/` |
+| `truebones_fbx2glb.py` / `character_fbx2glb.py` | Per-clip Truebones FBX → GLB (mesh, armature and take preserved); rigged T-pose character FBX → GLB |
 
 ```bash
 python -m data_process.tools.merge_summaries --output_dir dataset/export/<dataset>
@@ -674,8 +601,6 @@ python data_process/tools/patch_annotations.py --dry_run
 python -m data_process.tools.vis_joint_count            # defaults over every dataset/export/*
 blender -b -P data_process/tools/truebones_fbx2glb.py -- --data_dir <in> --output_dir <out>
 ```
-
-Both distribution tools default over every `dataset/export/*`, write each dataset's figure next to its JSON, and put the comparison figure under `outputs/{clip_frames,joint_count}_vis/`.
 
 ## Conventions
 
@@ -691,13 +616,11 @@ Both distribution tools default over every `dataset/export/*`, write each datase
 - **EEVEE renders fail / produce black frames under `blender -b`** — stage 2a must run with plain `python` and the pip `bpy` module (the wrappers already do); headless `blender -b` has no GPU display surface for EEVEE.
 - **All render workers land on one GPU** — `CUDA_VISIBLE_DEVICES` does not bind EEVEE's EGL context. Run one render job per GPU through a cgroup / scheduler allocation that exposes a single device.
 - **Offline compute nodes** — with a populated HuggingFace cache, export `HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1` before the local Qwen caption/classify runs.
-- **A multi-worker export exited non-zero** — the wrapper deliberately does **not** merge summary shards when any worker failed, since merging a truncated set would shrink the canonical JSONs and delete the shards. Rerun to finish the missing assets, then merge by hand (see below).
-- **`joint_names.json` is missing object types that have clips** — an export killed mid-run (scheduler walltime, OOM) can leave the summary JSONs behind the completion markers. Rebuild them from the markers:
+- **A multi-worker export exited non-zero, or `joint_names.json` is missing object types that have clips** — the wrapper deliberately does not merge summary shards when a worker failed, and an export killed mid-run can leave the summary JSONs behind the completion markers. Rerun to finish the missing assets, then rebuild the JSONs from the markers (additive and idempotent):
   ```bash
   python -m data_process.tools.merge_summaries --output_dir dataset/export/<dataset>
   ```
-  Additive and idempotent.
-- **Stage 4 re-processes objects that look unchanged** — the `cond_parts/` cache key covers thresholds, topology settings, the caption/annotation digests and the object's clip list; any of those changing is enough. The run logs the exact diff per object (`cache invalidated (settings changed: ...)`).
+- **Stage 4 re-processes objects that look unchanged** — the `cond_parts/` cache key covers thresholds, topology settings, the caption/annotation digests and the object's clip list. The run logs the exact diff per object (`cache invalidated (settings changed: ...)`).
 - **`Object type mismatch between ...`** — stage 4 refuses to run when `joint_names.json`, `clean_joint_names.json` and `face_joint_names.json` cover different object types. Rerun the stage-3 wrappers on the current export directory.
 
 If you run into a problem not covered here, please open an issue or email [linzhan@princeton.edu](mailto:linzhan@princeton.edu). Citation and license information is in the [top-level README](../README.md).

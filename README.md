@@ -31,12 +31,11 @@
 ## 🔥 News
 
 - **[2026-09-06]** The **training and inference code** is released. 🚀
-- **[2026-09-04]** Our paper is on [arXiv](https://arxiv.org/abs/2609.05415). 📄
 - **[2026-08-30]** The raw **UniML3D dataset** and its [data-processing pipeline](data_process/) are released. 🚀
 - **[2026-08-01]** Our [Interactive Demo](https://linzhanmou.com/unimate/interactive.html) is live — browse our animation results in 3D. 🎮
 - **[2026-07-18]** UniMate is accepted to SIGGRAPH Asia 2026! 🎉
 
-> **[TODO]** Pretrained checkpoints, processed data and detailed documents are coming soon.
+> **[TODO]** Pretrained checkpoints, the exact training configuration and data manifest used to produce them, evaluation scripts, and demo prompts will be released soon.
 
 ## 🛠️ Environment Setup
 
@@ -70,7 +69,7 @@ Runs are configured by the JSON files in [`configs/`](configs/).
 <details>
 <summary><b>Config naming</b> — <code>{dataset}_{frames}frames_{attention}_{text_cond}.json</code></summary>
 
-24 configs: 4 data combinations x 3 clip lengths x 2 model variants.
+8 configs: 4 data combinations x 2 model variants, all at 60 frames.
 
 | Prefix | Training data |
 |--------|---------------|
@@ -79,7 +78,7 @@ Runs are configured by the JSON files in [`configs/`](configs/).
 
 | Length | `dataset.max_motion_length` |
 |--------|-----------------------------|
-| `60frames` / `90frames` / `120frames` | 60 / 90 / 120 frames per clip |
+| `60frames` | 60 frames per clip |
 
 | Suffix | `model.attention` x `model.text_cond` |
 |--------|---------------------------------------|
@@ -88,7 +87,7 @@ Runs are configured by the JSON files in [`configs/`](configs/).
 
 The two axes are independent and all four combinations are implemented, so `full` x `adaln` and `graph` x `cross_attn` also run if you set them in a config; the two shipped pairings are the ones the paper compares.
 
-Not shared across configs: `training.batch_size` and `training.num_steps` are tuned per data combination and clip length (GPU memory tracks batch x frames x joints). Every other setting is identical — including `dataset.{min,max}_joints = {5, 100}`, which bounds the skeleton sizes a run admits (object types outside the range are dropped) and, through what survives, the joint-axis padding width.
+Not shared across configs: `training.batch_size`, `training.num_steps` and `dataset.max_joints` are tuned per data combination (GPU memory tracks batch x frames x joints). `dataset.max_joints` is `100` for `truebones_*` / `mixamo_*` and `60` for `objaverse_*` / `uniml3d_*`; `dataset.min_joints` is `5` everywhere. Together they bound the skeleton sizes a run admits (object types outside the range are dropped) and, through what survives, the joint-axis padding width. Every other setting is identical.
 
 </details>
 
@@ -137,6 +136,15 @@ python -m unimate.tools.precompute_text_emb --config configs/uniml3d_60frames_gr
 ```
 
 This writes `caption_emb_cache.npz` and `joint_emb_cache.npz` into each `dataset/features/<dataset>/` the config uses. Captions are cached per token (the sequence `cross_attn` attends; `adaln` mean-pools it), joint names as one pooled vector each, keyed by the **cleaned** joint vocabulary that stage 3 produces — the shared naming is what lets the same anatomical joint embed identically across rigs. Re-run it after regenerating captions or joint names: anything the cache misses is still encoded at load time, so a stale cache costs speed rather than correctness.
+
+</details>
+
+<details>
+<summary><b>Troubleshooting</b> — unstable training on Objaverse</summary>
+
+A non-trivial share of the Objaverse-XL rigs and clips are defective: rest poses that lie flat, are rotated or are inverted, and clips that stitch several unrelated actions together. Training on them can destabilize or collapse a run, and isolated spikes in the training loss are usually a symptom of bad data rather than of optimization.
+
+To localize the problem, first train on Mixamo and Truebones alone — set `dataset.dataset_list` to `["truebones", "mixamo"]` in a copy of a config. If that run is healthy, the fault is on the Objaverse side. From there, inspect the skeleton preview videos of the suspect object types under `dataset/features/objaverse/videos/`, by eye or with an automated pass, and add the offending rigs and clips to the stage-4 skip lists that [`tools/patch_annotations.py`](data_process/README.md#stage-3--joint-annotation-name-cleanup--facing-direction) maintains.
 
 </details>
 
@@ -313,3 +321,7 @@ If you find UniMate useful in your research, please consider citing our work:
 The code in this repository is released under the [MIT License](LICENSE).
 
 The datasets remain governed by the licenses of their original sources: the [Mixamo](https://www.mixamo.com/) assets by Adobe's Mixamo terms of use, the [Objaverse-XL](https://objaverse.allenai.org/) assets by the license attached to each original object, and the Truebones ZOO motions by [Truebones](https://truebones.com)' commercial license. Please review and comply with the respective source licenses before using the data.
+
+## 📌 Note
+
+The processed **UniML3D** dataset is being prepared for open release. Its captions were **re-processed** for this release, so they do not necessarily match the prompts shown on the [project page](https://linzhanmou.com/unimate/) or in the paper.
