@@ -1,6 +1,6 @@
 # UniMate-B3D
 
-**Local text-to-motion for simple deform-bone rigs in Blender.** This is a fork of [Friedrich-M/UniMate](https://github.com/Friedrich-M/UniMate) that adds a Blender panel, a separate inference backend, prompt timelines, pose references, and an editable Blender Action. Maintained by **Nopeburger**.
+**Local text-to-motion for simple deform-bone rigs in Blender.** This is a fork of [Friedrich-M/UniMate](https://github.com/Friedrich-M/UniMate) that adds a Blender panel, a separate inference backend, prompt timelines, pose references, and an editable Blender Action. Maintained by [@nopeburger](https://github.com/nopeburger).
 
 ![Sword swing from the included 180-frame Blender demo](demo/media/sword-swing.gif)
 
