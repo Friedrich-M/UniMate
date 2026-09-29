@@ -1,0 +1,12 @@
+schema_version = "1.0.0"
+id = "unimate_motion"
+version = "0.3.0"
+name = "UniMate Motion"
+tagline = "Generate motion for deform rigs with local UniMate inference"
+maintainer = "Nopeburger"
+type = "add-on"
+tags = ["Animation", "Rigging"]
+blender_version_min = "4.2.0"
+license = ["SPDX:GPL-3.0-or-later"]
+[permissions]
+files = "Export skeleton requests and import locally generated motion"

@@ -1,0 +1,18 @@
+# Local inference environment and outputs
+.venv/
+models/
+cache/
+outputs/
+logs/
+__pycache__/
+*.pyc
+*.pyo
+*.blend1
+*.blend2
+.thumbnails/
+*.download
+*.tmp
+
+# Development-only artifacts
+tests/artifacts/
+previews/

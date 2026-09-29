@@ -1,0 +1,314 @@
+bl_info = {
+    "name": "UniMate Motion", "author": "Nopeburger",
+    "version": (0, 3, 0), "blender": (4, 2, 0),
+    "location": "3D View > Sidebar > UniMate", "category": "Animation",
+    "description": "Local text-to-motion for simple human and creature deform rigs",
+}
+import json
+from pathlib import Path
+import subprocess
+import tempfile
+import time
+import uuid
+import bpy
+from bpy.app.handlers import persistent
+from bpy.props import StringProperty, IntProperty, FloatProperty, EnumProperty, BoolProperty, PointerProperty, CollectionProperty
+from .rig import armature_for, export_skeleton, export_ground, apply_result
+from . import clips
+
+_job = None
+
+def selected_rig(context):
+    return context.scene.unimate_motion.rig or armature_for(context.object)
+
+class UniMateSettings(bpy.types.PropertyGroup):
+    mode: EnumProperty(name="Workflow", items=[("SINGLE", "Single prompt", ""), ("TIMELINE", "Prompt timeline", "")], default="TIMELINE")
+    clips: CollectionProperty(type=clips.UniMateClip)
+    clip_index: IntProperty(default=0, min=0)
+    bone_mapping: CollectionProperty(type=clips.UniMateBoneMapping)
+    show_mapping: BoolProperty(default=False)
+    ground_object: PointerProperty(name="Ground mesh", type=bpy.types.Object,
+        poll=lambda self, obj: obj.type == "MESH",
+        description="Optional static surface for foot and paw contact; otherwise use the rest sole level")
+    motion_cleanup: BoolProperty(name="Motion cleanup", default=True,
+        description="Correct self-collisions, ground contact and extreme foot/paw rotations; intersecting reference poses may be adjusted")
+    overlap: IntProperty(name="Transition context", default=10, min=1, max=30)
+    transition_frames: IntProperty(name="Prompt blend frames", default=12, min=0, max=120, description="Smooth joins between generated prompt clips; zero disables")
+    pose_approach_frames: IntProperty(name="Pose approach frames", default=60, min=0, max=600, description="Ease into captured reference poses over this many frames within their clip; replaces motion in that approach with a pose blend; zero disables")
+    rig: PointerProperty(name="Rig", type=bpy.types.Object, poll=lambda self, obj: obj.type == "ARMATURE")
+    project: StringProperty(name="Project folder", subtype="DIR_PATH", default="")
+    experiment: StringProperty(name="Model folder", subtype="DIR_PATH", default="")
+    prompt: StringProperty(name="Motion", default="A human walks forward at a steady pace.")
+    forward: EnumProperty(name="Rig faces", items=[("-Y", "-Y", ""), ("Y", "+Y", ""), ("X", "+X", ""), ("-X", "-X", "")], default="-Y")
+    family: EnumProperty(name="Character", items=[("mixamo", "Human", ""), ("truebones", "Animal / Creature", ""), ("objaverse", "Other articulated model", "")])
+    tips: BoolProperty(name="Animate terminal bones", default=True, description="Add virtual endpoint joints; these count toward the model joint limit")
+    frames: IntProperty(name="Frames", default=60, min=2, max=60)
+    fps: FloatProperty(name="Motion FPS", default=30, min=1, max=120, description="Playback interpretation; the source training clips use varying frame rates")
+    seed: IntProperty(name="Seed", default=10, min=0)
+    guidance: FloatProperty(name="Text guidance", default=3, min=1.01, max=20)
+    start_frame: IntProperty(name="Start frame", default=1)
+    status: StringProperty(default="Select a deform rig and describe its motion")
+    job_dir: StringProperty(subtype="DIR_PATH")
+    advanced: BoolProperty(name="Setup and generation settings", default=False)
+
+def refresh():
+    for screen in bpy.data.screens:
+        for area in screen.areas:
+            if area.type == "VIEW_3D":
+                area.tag_redraw()
+
+def stop_job():
+    global _job
+    if _job:
+        process = _job["process"]
+        if process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=3)
+        _job["log"].close()
+        _job = None
+
+@persistent
+def before_load(_):
+    stop_job()
+    if bpy.app.timers.is_registered(poll_job):
+        bpy.app.timers.unregister(poll_job)
+
+def poll_job():
+    global _job
+    if not _job:
+        return None
+    job = _job
+    try:
+        settings = job["scene"].unimate_motion
+        status_path = job["directory"] / "status.json"
+        status = {}
+        if status_path.is_file():
+            status = json.loads(status_path.read_text(encoding="utf-8"))
+            settings.status = status["message"][:220]
+        code = job["process"].poll()
+        if code is None:
+            refresh()
+            return .5
+        if job.get("kind") == "pose":
+            result = job["directory"] / "pose.json"
+            if code == 0 and result.is_file():
+                matched = False
+                for clip in settings.clips:
+                    for ref in clip.references:
+                        if ref.uid == job["reference_uid"] and bpy.path.abspath(ref.image_path) == job["source_image"]:
+                            ref.estimate_path = str(result)
+                            matched = True
+                settings.status = "Pose estimated - preview, then capture" if matched else "Reference changed; unused estimate saved in job folder"
+            else:
+                settings.status = "Pose estimation failed; see " + str(job["directory"] / "worker.log")
+        elif code == 0 and (job["directory"] / "motion.npz").is_file():
+            settings.status = status.get("message", "Motion ready - Apply Motion")[:220]
+        elif not status_path.is_file() or status.get("state") != "failed":
+            settings.status = "Generation failed; see worker.log in the job folder"
+        job["log"].close()
+        _job = None
+    except (ReferenceError, AttributeError):
+        stop_job()
+        return None
+    except (OSError, ValueError):
+        return .5
+    refresh()
+    return None
+
+class UNIMATE_OT_validate(bpy.types.Operator):
+    bl_idname = "unimate.validate"
+    bl_label = "Check Rig"
+    def execute(self, context):
+        settings = context.scene.unimate_motion
+        try:
+            data = export_skeleton(selected_rig(context), settings.forward, settings.tips)
+            path = Path(bpy.path.abspath(settings.experiment)) / "config.json"
+            limit = json.loads(path.read_text())["dataset"]["max_joints"] if path.is_file() else 71
+            count = len(data["parents"])
+            if count > limit:
+                raise ValueError(f"{count} joints exceed this model's {limit}-joint limit. Simplify the rig or disable terminal bones.")
+            if count < 5:
+                raise ValueError("This model requires at least 5 joints.")
+            settings.status = f"Rig ready: {len([n for n in data['bone_names'] if n])} bones, {count}/{limit} model joints"
+            self.report({"INFO"}, settings.status)
+            return {"FINISHED"}
+        except Exception as exc:
+            settings.status = str(exc)
+            self.report({"ERROR"}, str(exc))
+            return {"CANCELLED"}
+
+class UNIMATE_OT_generate(bpy.types.Operator):
+    bl_idname = "unimate.generate"
+    bl_label = "Generate Motion"
+    bl_description = "Run local UniMate inference in a separate process"
+    @classmethod
+    def poll(cls, context):
+        return _job is None and selected_rig(context) is not None
+    def execute(self, context):
+        global _job
+        settings = context.scene.unimate_motion
+        try:
+            rig = selected_rig(context)
+            skeleton = export_skeleton(rig, settings.forward, settings.tips)
+            if not settings.project.strip() or not settings.experiment.strip():
+                raise ValueError("Set Project folder and Model folder in Advanced settings.")
+            root = Path(bpy.path.abspath(settings.project)).resolve()
+            exp = Path(bpy.path.abspath(settings.experiment)).resolve()
+            python = root / ".venv" / "Scripts" / "python.exe"
+            if not python.is_file():
+                python = root / ".venv" / "bin" / "python"
+            worker = root / "backend" / "worker.py"
+            if not python.is_file() or not worker.is_file():
+                raise ValueError("Set the project folder to a configured UniMate installation.")
+            for name in ("config.json", "dataset_stats.npy"):
+                if not (exp / name).is_file():
+                    raise ValueError(f"Missing model file: {name}")
+            config = json.loads((exp / "config.json").read_text())
+            minimum = config["dataset"].get("min_joints", 5)
+            maximum = config["dataset"]["max_joints"]
+            if not minimum <= len(skeleton["parents"]) <= maximum:
+                raise ValueError(f"Model requires {minimum}–{maximum} joints; rig has {len(skeleton['parents'])}.")
+            if not list((exp / "checkpoints").glob("checkpoint_step_*.pt")):
+                raise ValueError("Download a UniMate checkpoint into the model folder.")
+            if settings.mode == "SINGLE" and not settings.prompt.strip():
+                raise ValueError("Describe the motion first.")
+            folder = root / "outputs" / (time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:8])
+            folder.mkdir(parents=True)
+            request = dict(schema=1, skeleton=skeleton, prompt=settings.prompt.strip(),
+                           experiment=str(exp), stats_family=settings.family, frames=settings.frames,
+                           fps=settings.fps, seed=settings.seed, guidance=settings.guidance,
+                           motion_cleanup=settings.motion_cleanup,
+                           ground=export_ground(rig, skeleton, settings.ground_object) if settings.motion_cleanup else None)
+            if settings.mode == "TIMELINE":
+                request.update(clips.collect_schedule(settings, skeleton, context.scene))
+                request.update(transition_frames=settings.transition_frames,
+                               pose_approach_frames=settings.pose_approach_frames)
+                request["prompt"] = " / ".join(c["prompt"] for c in request["clips"])
+            (folder / "request.json").write_text(json.dumps(request, indent=2), encoding="utf-8")
+            log = (folder / "worker.log").open("w", encoding="utf-8")
+            try:
+                process = subprocess.Popen(
+                    [str(python), "-u", str(worker), "--request", str(folder / "request.json"),
+                     "--output", str(folder / "motion.npz"), "--status", str(folder / "status.json")],
+                    cwd=tempfile.gettempdir(), stdout=log, stderr=subprocess.STDOUT,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            except Exception:
+                log.close()
+                raise
+            settings.rig = rig
+            settings.job_dir = str(folder)
+            settings.status = "Starting local UniMate"
+            _job = dict(process=process, log=log, directory=folder, scene=context.scene)
+            if not bpy.app.timers.is_registered(poll_job):
+                bpy.app.timers.register(poll_job, first_interval=.5)
+            return {"FINISHED"}
+        except Exception as exc:
+            settings.status = str(exc)
+            self.report({"ERROR"}, str(exc))
+            return {"CANCELLED"}
+
+class UNIMATE_OT_cancel(bpy.types.Operator):
+    bl_idname = "unimate.cancel"
+    bl_label = "Cancel Generation"
+    def execute(self, context):
+        stop_job()
+        context.scene.unimate_motion.status = "Generation cancelled"
+        refresh()
+        return {"FINISHED"}
+
+class UNIMATE_OT_apply(bpy.types.Operator):
+    bl_idname = "unimate.apply"
+    bl_label = "Apply Motion"
+    bl_options = {"REGISTER", "UNDO"}
+    @classmethod
+    def poll(cls, context):
+        folder = context.scene.unimate_motion.job_dir
+        return _job is None and bool(folder) and (Path(folder) / "motion.npz").is_file()
+    def execute(self, context):
+        settings = context.scene.unimate_motion
+        try:
+            folder = Path(settings.job_dir)
+            request = json.loads((folder / "request.json").read_text(encoding="utf-8"))
+            start = settings.start_frame
+            if request.get("clips"):
+                start = request["clips"][0]["start"]
+                fps = context.scene.render.fps / context.scene.render.fps_base
+                if abs(fps - request["fps"]) > .001:
+                    raise ValueError("Scene FPS changed since timeline generation; restore it before applying.")
+            action = apply_result(selected_rig(context), request["skeleton"], folder / "motion.npz",
+                                  start, context.scene)
+            settings.status = f"Created Action: {action.name}"
+            self.report({"INFO"}, settings.status)
+            return {"FINISHED"}
+        except Exception as exc:
+            self.report({"ERROR"}, str(exc))
+            return {"CANCELLED"}
+
+class UNIMATE_PT_main(bpy.types.Panel):
+    bl_label = "UniMate Motion"
+    bl_idname = "UNIMATE_PT_main"
+    bl_space_type = "VIEW_3D"
+    bl_region_type = "UI"
+    bl_category = "UniMate"
+    def draw(self, context):
+        layout, settings = self.layout, context.scene.unimate_motion
+        layout.prop(settings, "rig")
+        layout.prop(settings, "family")
+        layout.prop(settings, "forward")
+        layout.operator("unimate.validate", icon="CHECKMARK")
+        layout.separator()
+        layout.prop(settings, "mode", text="")
+        if settings.mode == "TIMELINE":
+            clips.draw_timeline(layout, context)
+            layout.prop(settings, "seed")
+            layout.prop(settings, "transition_frames")
+            layout.prop(settings, "pose_approach_frames")
+        else:
+            layout.prop(settings, "prompt", text="")
+            row = layout.row(align=True)
+            row.prop(settings, "frames")
+            row.prop(settings, "seed")
+            layout.prop(settings, "start_frame")
+        layout.prop(settings, "motion_cleanup")
+        if _job:
+            layout.operator("unimate.cancel", icon="CANCEL")
+        else:
+            layout.operator("unimate.generate", icon="PLAY")
+        layout.operator("unimate.apply", icon="ACTION")
+        box = layout.box()
+        for offset in range(0, len(settings.status), 44):
+            box.label(text=settings.status[offset:offset+44])
+        layout.prop(settings, "advanced", icon="TRIA_DOWN" if settings.advanced else "TRIA_RIGHT", emboss=False)
+        if settings.advanced:
+            layout.prop(settings, "ground_object")
+            layout.prop(settings, "tips")
+            layout.prop(settings, "guidance")
+            layout.prop(settings, "fps")
+            layout.prop(settings, "overlap")
+            layout.prop(settings, "project")
+            layout.prop(settings, "experiment")
+            layout.prop(settings, "job_dir", text="Last job")
+        layout.label(text="Experimental • simple deform rigs", icon="INFO")
+
+classes = clips.CLASSES + (UniMateSettings, UNIMATE_OT_validate, UNIMATE_OT_generate, UNIMATE_OT_cancel, UNIMATE_OT_apply, UNIMATE_PT_main)
+
+def register():
+    for cls in classes:
+        bpy.utils.register_class(cls)
+    bpy.types.Scene.unimate_motion = PointerProperty(type=UniMateSettings)
+    bpy.app.handlers.load_pre.append(before_load)
+
+def unregister():
+    clips.cleanup()
+    stop_job()
+    if bpy.app.timers.is_registered(poll_job):
+        bpy.app.timers.unregister(poll_job)
+    if before_load in bpy.app.handlers.load_pre:
+        bpy.app.handlers.load_pre.remove(before_load)
+    del bpy.types.Scene.unimate_motion
+    for cls in reversed(classes):
+        bpy.utils.unregister_class(cls)

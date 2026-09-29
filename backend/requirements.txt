@@ -1,0 +1,13 @@
+--extra-index-url https://download.pytorch.org/whl/cu124
+torch==2.5.1+cu124
+numpy==1.26.4
+transformers==4.46.3
+torch-geometric==2.7.0
+torchdiffeq==0.2.5
+einops==0.8.1
+rich
+sentencepiece==0.2.0
+scipy
+huggingface-hub
+mediapipe==0.10.21
+opencv-contrib-python==4.11.0.86
