@@ -27,6 +27,14 @@ Inference runs in a separate Python environment. Blender's Python does not need 
 
 To build the add-on ZIP from source instead, run `python scripts/package.py`. Its package is intentionally small; the backend and weights stay in the cloned project.
 
+## Add-on panel
+
+The [Blender add-on panel guide](docs/BLENDER_ADDON_GUIDE.md) explains every control, including rig setup, prompt ranges, pose references, cleanup, generation, and advanced settings. It also shows screenshots of the single-prompt, timeline, pose-reference, and advanced panels.
+
+| Single prompt | Prompt timeline |
+| :---: | :---: |
+| ![Single-prompt controls](docs/images/panel-single.png) | ![Prompt timeline controls](docs/images/panel-timeline.png) |
+
 ## Generate motion
 
 1. Select a simple, single-root deform armature, or assign it in **Rig**. Choose **Human**, **Animal / Creature**, or **Other articulated model**, set the direction the rig faces in armature-local space, and click **Check Rig**.
