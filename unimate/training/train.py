@@ -115,31 +115,26 @@ def train_diffusion(args: TrainingArgs, config: MainConfig,
         checkpoint_dir=checkpoint_dir,
     )
 
-    # ---- Optimizer & LR schedule ----
+    # ---- Optimizer ----
     optimizer = torch.optim.AdamW(
         model.parameters(),
         lr=config.training.learning_rate,
         weight_decay=config.training.weight_decay,
         betas=(config.training.adam_beta1, config.training.adam_beta2),
     )
-    lr_scheduler = get_cosine_with_min_lr_schedule_with_warmup(
-        optimizer,
-        num_warmup_steps=int(config.training.warmup_ratio * config.training.num_steps),
-        num_training_steps=config.training.num_steps,
-        min_lr_rate=config.training.min_lr_ratio,
-        num_cycles=0.5,
-    )
-
     # ---- Accelerate: wrap model, optimizer, dataloader for distributed ----
-    # NOTE: lr_scheduler is NOT wrapped by accelerator. AcceleratedScheduler
-    # with split_batches=False steps num_processes times per call to compensate
-    # for data sharding, but num_training_steps already equals the target number
-    # of optimizer steps, so wrapping would advance the schedule num_gpus× too fast.
     model, optimizer, dataloader = accelerator.prepare(
         model, optimizer, dataloader,
     )
     trainer.model = model  # point trainer at the wrapped model
     trainer.initialize_ema(accelerator)
+
+    # Count optimizer steps, not micro-batches. Accelerate syncs gradients on
+    # the final batch of each dataloader, so a partial accumulation group at
+    # the end of an epoch also produces one optimizer step.
+    optimizer_steps_per_epoch = (
+        len(dataloader) + accelerator.gradient_accumulation_steps - 1
+    ) // accelerator.gradient_accumulation_steps
 
     # ---- TensorBoard ----
     writer = SummaryWriter(log_dir) if is_main else None
@@ -148,7 +143,19 @@ def train_diffusion(args: TrainingArgs, config: MainConfig,
     tracker = TrainingTracker(
         max_epochs=config.training.num_epochs,
         max_steps=config.training.num_steps,
-        steps_per_epoch=len(dataloader),
+        steps_per_epoch=optimizer_steps_per_epoch,
+    )
+
+    # Create the scheduler after tracker initialization so epoch-based runs
+    # have a concrete optimizer-step budget too. Keep it unwrapped: Accelerate's
+    # scheduler wrapper compensates for process sharding and would advance this
+    # already optimizer-step-based schedule too quickly.
+    lr_scheduler = get_cosine_with_min_lr_schedule_with_warmup(
+        optimizer,
+        num_warmup_steps=int(config.training.warmup_ratio * tracker.total_steps),
+        num_training_steps=tracker.total_steps,
+        min_lr_rate=config.training.min_lr_ratio,
+        num_cycles=0.5,
     )
 
     # ---- Resume from checkpoint (if requested) ----
