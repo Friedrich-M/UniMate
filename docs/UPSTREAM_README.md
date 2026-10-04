@@ -30,12 +30,13 @@
 
 ## 🔥 News
 
+- **[2026-09-27]** Preview checkpoints are released at [HuggingFace](https://huggingface.co/Linzhan/UniMate); new checkpoints will be synced there. 📦
 - **[2026-09-06]** The **training and inference code** is released. 🚀
 - **[2026-08-30]** The [UniML3D dataset](https://huggingface.co/collections/Linzhan/unimate) and its [data-processing pipeline](../data_process/) are released. 🚀
 - **[2026-08-01]** Our [Interactive Demo](https://linzhanmou.com/unimate/interactive.html) is live — browse our animation results in 3D. 🎮
 - **[2026-07-18]** UniMate is accepted to SIGGRAPH Asia 2026! 🎉
 
-> **[Update]** Preview checkpoints are released at [HuggingFace](https://huggingface.co/Linzhan/UniMate); new checkpoints will be synced there.
+> **[TODO]** We will release an official preprocessing pipeline for new (out-of-distribution) rigs by this week.
 
 ## 🛠️ Environment Setup
 
@@ -147,6 +148,12 @@ A non-trivial share of the Objaverse-XL rigs and clips are defective: rest poses
 To localize the problem, first train on Mixamo and Truebones alone — set `dataset.dataset_list` to `["truebones", "mixamo"]` in a copy of a config. If that run is healthy, the fault is on the Objaverse side. From there, inspect the skeleton preview videos of the suspect object types under `dataset/features/objaverse/videos/`, by eye or with an automated pass, and add the offending rigs and clips to the stage-4 skip lists that [`tools/patch_annotations.py`](../data_process/README.md#stage-3--joint-annotation-name-cleanup--facing-direction) maintains.
 
 </details>
+
+## 📌 Note
+
+The processed **UniML3D** dataset is being prepared for open release. Its captions were **re-processed** for this release, so they do not necessarily match the prompts shown on the project page or in the paper. See the released caption style in [Truebones](https://huggingface.co/datasets/Linzhan/UniML3D/blob/main/export/truebones/motion_captions.json) · [Mixamo](https://huggingface.co/datasets/Linzhan/UniML3D/blob/main/export/mixamo/motion_captions.json) · [Objaverse](https://huggingface.co/datasets/Linzhan/UniML3D/blob/main/export/objaverse/motion_captions.json). New prompts start with "An object" to generalize across objects.
+
+UniMate is an **early step** toward text-to-animation for any skeleton, and many motions and skeletons **still fail**. We believe that scaling up training data — **distilled from agents or generated from videos** — is a promising direction to close this gap. If you run into failure cases, please open an issue or contact us; they help us improve.
 
 ## 🎬 Inference
 
@@ -318,10 +325,10 @@ If you find UniMate useful in your research, please consider citing our work:
 
 ## ⚖️ License
 
-The code in this repository is released under the [MIT License](LICENSE).
+The code in this repository is released under the [MIT License](../LICENSE).
 
 The datasets remain governed by the licenses of their original sources: the [Mixamo](https://www.mixamo.com/) assets by Adobe's Mixamo terms of use, the [Objaverse-XL](https://objaverse.allenai.org/) assets by the license attached to each original object, and the Truebones ZOO motions by [Truebones](https://truebones.com)' commercial license. Please review and comply with the respective source licenses before using the data.
 
-## 📌 Note
+## 🤝 Acknowledgement
 
-The processed **UniML3D** dataset is being prepared for open release. Its captions were **re-processed** for this release, so they do not necessarily match the prompts shown on the [project page](https://linzhanmou.com/unimate/) or in the paper.
+We thank the authors of [AnyTop](https://github.com/Anytop2025/Anytop) for open-sourcing their codebase, on which parts of this repository build.

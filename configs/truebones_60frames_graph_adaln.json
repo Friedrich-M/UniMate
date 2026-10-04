@@ -62,7 +62,7 @@
         "diffusion_steps": 100
     },
     "training": {
-        "batch_size": 24,
+        "batch_size": 16,
         "seed": 10,
         "diff_model": "flow",
         "learning_rate": 0.0001,
