@@ -200,7 +200,7 @@ class UNIMATE_OT_preview_pose(bpy.types.Operator):
             if not ref.estimate_path:
                 raise ValueError("Estimate the human pose first.")
             rig = selected_rig(context)
-            skeleton = export_skeleton(rig, s.forward, s.tips)
+            skeleton = export_skeleton(rig, s.forward, s.tips, s.fingers)
             if not s.bone_mapping:
                 bpy.ops.unimate.map_human()
             mapping = {entry.role: entry.bone for entry in s.bone_mapping}
@@ -225,7 +225,7 @@ class UNIMATE_OT_capture_pose(bpy.types.Operator):
         try:
             ref = current_reference(s)
             rig = selected_rig(context)
-            skeleton = export_skeleton(rig, s.forward, s.tips)
+            skeleton = export_skeleton(rig, s.forward, s.tips, s.fingers)
             context.view_layer.update()
             ref.pose_json = json.dumps(capture_pose(rig, skeleton))
             s.status = f"Pose captured for frame {ref.frame}"
