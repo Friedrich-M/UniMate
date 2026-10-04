@@ -1,10 +1,11 @@
 bl_info = {
     "name": "UniMate Motion", "author": "Nopeburger",
-    "version": (0, 4, 0), "blender": (4, 2, 0),
+    "version": (0, 5, 0), "blender": (4, 2, 0),
     "location": "3D View > Sidebar > UniMate", "category": "Animation",
     "description": "Local text-to-motion for simple human and creature deform rigs",
 }
 import json
+import numpy as np
 from pathlib import Path
 import subprocess
 import tempfile
@@ -41,9 +42,12 @@ class UniMateSettings(bpy.types.PropertyGroup):
     project: StringProperty(name="Project folder", subtype="DIR_PATH", default="")
     experiment: StringProperty(name="Model folder", subtype="DIR_PATH", default="")
     prompt: StringProperty(name="Motion", default="A human walks forward at a steady pace.")
-    forward: EnumProperty(name="Rig faces", items=[("-Y", "-Y", ""), ("Y", "+Y", ""), ("X", "+X", ""), ("-X", "-X", "")], default="-Y")
+    forward: EnumProperty(name="Rig faces", items=[("-Y", "-Y", ""), ("Y", "+Y", ""), ("X", "+X", ""), ("-X", "-X", "")], default="-Y",
+        description="World direction the character faces in its rest pose; the armature object's rotation is taken into account")
     family: EnumProperty(name="Character", items=[("mixamo", "Human", ""), ("truebones", "Animal / Creature", ""), ("objaverse", "Other articulated model", "")])
     tips: BoolProperty(name="Animate terminal bones", default=True, description="Add virtual endpoint joints; these count toward the model joint limit")
+    fingers: BoolProperty(name="Animate finger bones", default=True,
+        description="Include finger and thumb bones. Turn off for rigs with full hands (such as Mixamo); fingers then keep their rest pose")
     frames: IntProperty(name="Frames", default=60, min=2, max=60)
     fps: FloatProperty(name="Motion FPS", default=30, min=1, max=120, description="Playback interpretation; the source training clips use varying frame rates")
     seed: IntProperty(name="Seed", default=10, min=0)
@@ -198,21 +202,45 @@ def poll_job():
     refresh()
     return None
 
+def joint_hint(settings):
+    options = [name for name, on in (("Animate finger bones", settings.fingers),
+                                     ("Animate terminal bones", settings.tips)) if on]
+    if options:
+        return "Turn off " + " or ".join(options) + " in setup settings, or simplify the rig."
+    return "Simplify the rig."
+
+def facing_from_feet(skeleton):
+    """World axis the feet point along at rest, or None when they point mostly down."""
+    directions = [np.asarray(skeleton["rest_matrices"][p["joint"]])[:3, 1] for p in skeleton["foot_profiles"]]
+    if not directions:
+        return None
+    mean = np.mean(directions, axis=0)
+    horizontal = mean[:2]
+    if np.linalg.norm(horizontal) < .3 * np.linalg.norm(mean):
+        return None
+    axis = int(np.argmax(np.abs(horizontal)))
+    return ("-" if horizontal[axis] < 0 else "") + "XY"[axis]
+
 class UNIMATE_OT_validate(bpy.types.Operator):
     bl_idname = "unimate.validate"
     bl_label = "Check Rig"
     def execute(self, context):
         settings = context.scene.unimate_motion
         try:
-            data = export_skeleton(selected_rig(context), settings.forward, settings.tips)
+            data = export_skeleton(selected_rig(context), settings.forward, settings.tips, settings.fingers)
             path = Path(bpy.path.abspath(settings.experiment)) / "config.json"
             limit = json.loads(path.read_text())["dataset"]["max_joints"] if path.is_file() else 71
             count = len(data["parents"])
             if count > limit:
-                raise ValueError(f"{count} joints exceed this model's {limit}-joint limit. Simplify the rig or disable terminal bones.")
+                raise ValueError(f"{count} joints exceed this model's {limit}-joint limit. " + joint_hint(settings))
             if count < 5:
                 raise ValueError("This model requires at least 5 joints.")
             settings.status = f"Rig ready: {len([n for n in data['bone_names'] if n])} bones, {count}/{limit} model joints"
+            facing = facing_from_feet(data)
+            if facing and facing != settings.forward:
+                settings.status += f". Feet point {facing.replace('Y', '+Y').replace('X', '+X').replace('-+', '-')}; check Rig faces"
+                self.report({"WARNING"}, settings.status)
+                return {"FINISHED"}
             self.report({"INFO"}, settings.status)
             return {"FINISHED"}
         except Exception as exc:
@@ -232,7 +260,7 @@ class UNIMATE_OT_generate(bpy.types.Operator):
         settings = context.scene.unimate_motion
         try:
             rig = selected_rig(context)
-            skeleton = export_skeleton(rig, settings.forward, settings.tips)
+            skeleton = export_skeleton(rig, settings.forward, settings.tips, settings.fingers)
             if not settings.project.strip() or not settings.experiment.strip():
                 raise ValueError("Set Project folder and Model folder in Advanced settings.")
             root = Path(bpy.path.abspath(settings.project)).resolve()
@@ -250,7 +278,8 @@ class UNIMATE_OT_generate(bpy.types.Operator):
             minimum = config["dataset"].get("min_joints", 5)
             maximum = config["dataset"]["max_joints"]
             if not minimum <= len(skeleton["parents"]) <= maximum:
-                raise ValueError(f"Model requires {minimum}–{maximum} joints; rig has {len(skeleton['parents'])}.")
+                hint = " " + joint_hint(settings) if len(skeleton["parents"]) > maximum else ""
+                raise ValueError(f"Model requires {minimum}–{maximum} joints; rig has {len(skeleton['parents'])}.{hint}")
             if not list((exp / "checkpoints").glob("checkpoint_step_*.pt")):
                 raise ValueError("Download a UniMate checkpoint into the model folder.")
             if settings.mode == "SINGLE" and not settings.prompt.strip():
@@ -387,6 +416,7 @@ class UNIMATE_PT_main(bpy.types.Panel):
         if settings.advanced:
             layout.prop(settings, "ground_object")
             layout.prop(settings, "tips")
+            layout.prop(settings, "fingers")
             layout.prop(settings, "guidance")
             layout.prop(settings, "fps")
             layout.prop(settings, "overlap")

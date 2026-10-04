@@ -4,6 +4,7 @@ import re
 import numpy as np
 from mathutils import Matrix, Vector
 from .motion import canonicalize, encode_pose, semantic_name
+from .rig import export_frame
 
 ROLES = ("hips", "spine", "chest", "neck", "head",
          "left_upper_arm", "left_forearm", "left_hand", "right_upper_arm", "right_forearm", "right_hand",
@@ -48,6 +49,10 @@ def capture_pose(rig, skeleton):
             parent = parents[j]
             positions[j] = np.asarray(rig.pose.bones[skeleton["bone_names"][parent]].tail)
             rotations[j] = rotations[parent]
+    linear, rotation = export_frame(rig)
+    if linear is not rotation:  # armature space -> export frame
+        positions = positions @ linear.T
+        rotations = rotation @ rotations @ rotation.T
     return encode_pose(positions, rotations, skeleton)
 
 def preview_estimate(rig, skeleton, estimate, mapping, threshold=.5):
@@ -55,9 +60,10 @@ def preview_estimate(rig, skeleton, estimate, mapping, threshold=.5):
     world = np.asarray(estimate["world"], dtype=float)
     if world.shape != (33, 5) or not np.isfinite(world).all():
         raise ValueError("Invalid human pose estimation result.")
-    # MediaPipe camera axes -> canonical Y-up, toward-camera +Z -> armature local.
+    # MediaPipe camera axes -> canonical Y-up, toward-camera +Z -> export frame -> armature space.
+    linear, rotation = export_frame(rig)
     points = world[:, :3] * np.array([1.,-1.,-1.])
-    points = points @ canon["basis"]
+    points = points @ canon["basis"] @ rotation
     confidence = np.minimum(world[:, 3], world[:, 4])
     core = [11,12,23,24]
     if np.min(confidence[core]) < threshold:
@@ -129,12 +135,15 @@ def preview_estimate(rig, skeleton, estimate, mapping, threshold=.5):
     # Single-view landmarks are hip-relative. Place the estimated body on the rig's
     # rest ground plane using its reconstructed extremities, rather than leaving a
     # sitting pose floating at the standing pelvis height.
-    low = min(min(matrix.translation.z,
-                  (matrix.translation + deltas[name] @ (rig.data.bones[name].tail_local-rig.data.bones[name].head_local)).z)
+    # Heights along world up, measured in armature space.
+    up = Vector(rotation.T @ np.array([0., 0., 1.]))
+    scale = float(np.linalg.norm(linear[:, 0]))
+    low = min(min(matrix.translation.dot(up),
+                  (matrix.translation + deltas[name] @ (rig.data.bones[name].tail_local-rig.data.bones[name].head_local)).dot(up))
               for name, matrix in matrices.items())
-    ground = min(head[2] for head in skeleton["heads"])
+    ground = min(head[2] for head in skeleton["heads"]) / scale
     for matrix in matrices.values():
-        matrix.translation.z += ground-low
+        matrix.translation += up * (ground-low)
     for name, matrix in matrices.items():
         bone = rig.data.bones[name]
         kwargs = dict(parent_matrix=matrices[bone.parent.name], parent_matrix_local=bone.parent.matrix_local) if bone.parent else {}

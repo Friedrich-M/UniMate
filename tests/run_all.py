@@ -23,6 +23,7 @@ PYTHON = ["check_timeline.py", "make_transition_fixture.py", "make_collision_fix
           "check_collision.py", "check_ground.py"]
 BLENDER = [("blender_apply.py", None), ("blender_workflow.py", None), ("blender_ground.py", None),
            ("blender_transition.py", None), ("blender_cleanup.py", None),
+           ("blender_frame.py", None),
            ("blender_obstacle.py", ROOT / "demo" / "UniMate_Run_Jump_Sword.blend")]
 
 def run(command, cwd):
