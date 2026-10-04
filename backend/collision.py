@@ -211,4 +211,10 @@ def cleanup(positions,rotations,skeleton,ground=None):
         maximum_overlap_after=initial.get("max_penetration_after",0.))
     report["ground_contact"]=contact
     report["foot_tilt_limits"]=contact.get("foot_limits",[])
+    # Corrections compose rotations repeatedly; along deep chains (fingers)
+    # the drift exceeds Apply's orthonormality check. Project each local
+    # rotation back onto SO(3) and rebuild the pose from the fixed offsets.
+    frames,joints=rotations.shape[:2]
+    local=Rotation.from_matrix(to_local(rotations,skeleton["parents"]).reshape(-1,3,3)).as_matrix()
+    positions,rotations=forward_kinematics(positions[:,0],local.reshape(frames,joints,3,3),skeleton)
     return positions,rotations,report
