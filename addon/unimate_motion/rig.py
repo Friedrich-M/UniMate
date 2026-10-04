@@ -162,6 +162,20 @@ def export_skeleton(rig, forward="-Y", tips=True):
     result["signature"] = signature(result)
     return result
 
+LINEAR = bpy.types.Keyframe.bl_rna.properties["interpolation"].enum_items["LINEAR"].value
+
+def write_curve(action, rig, path, index, group, frames, values):
+    """Write one linear F-Curve in a single bulk call."""
+    if hasattr(action, "fcurve_ensure_for_datablock"):  # Blender 4.4+ slotted actions
+        curve = action.fcurve_ensure_for_datablock(rig, path, index=index, group_name=group)
+    else:
+        curve = action.fcurves.new(path, index=index, action_group=group)
+    points = curve.keyframe_points
+    points.add(len(frames))
+    points.foreach_set("co", np.column_stack([frames, values]).astype(np.float32).ravel())
+    points.foreach_set("interpolation", np.full(len(frames), LINEAR, dtype=np.int32))
+    curve.update()
+
 def apply_result(rig, skeleton, path, start_frame, scene):
     current = export_skeleton(rig, skeleton["forward"], skeleton["tips"])
     if current["signature"] != skeleton["signature"]:
@@ -203,14 +217,16 @@ def apply_result(rig, skeleton, path, start_frame, scene):
         animation.action_blend_type = "REPLACE"
         animation.action_influence = 1.
         ratio = (scene.render.fps / scene.render.fps_base) / fps
+        times = start_frame + np.arange(frames) * ratio
+        # Only the root moves; child heads follow fixed rest offsets, so key
+        # rotations everywhere and location on root bones only. Scale stays 1.
+        keyed = [(j, name) for j, name in enumerate(skeleton["bone_names"]) if name]
+        quaternions = {name: np.empty((frames, 4)) for _, name in keyed}
+        locations = {name: np.empty((frames, 3)) for _, name in keyed if not rig.data.bones[name].parent}
         for t in range(frames):
-            frame = start_frame + t * ratio
             matrices = {}
-            for j, name in enumerate(skeleton["bone_names"]):
-                if name is None:
-                    continue
+            for j, name in keyed:
                 bone = rig.data.bones[name]
-                pose = rig.pose.bones[name]
                 matrix = Matrix(rotations[t, j].tolist()).to_4x4() @ bone.matrix_local
                 matrix.translation = positions[t, j].tolist()
                 matrices[name] = matrix
@@ -219,22 +235,26 @@ def apply_result(rig, skeleton, path, start_frame, scene):
                     parent_args = dict(parent_matrix=matrices[bone.parent.name],
                                        parent_matrix_local=bone.parent.matrix_local)
                 basis = bone.convert_local_to_pose(matrix, bone.matrix_local, invert=True, **parent_args)
-                location, quaternion, scale = basis.decompose()
-                if t and pose.rotation_quaternion.dot(quaternion) < 0:
-                    quaternion.negate()
-                pose.rotation_mode = "QUATERNION"
-                pose.location, pose.rotation_quaternion, pose.scale = location, quaternion, scale
-                for prop in ("location", "rotation_quaternion", "scale"):
-                    pose.keyframe_insert(prop, frame=frame, group=name)
-        # Blender 4.4+ stores curves inside Action channel bags.
-        if hasattr(action, "layers") and action.layers:
-            curves = [fc for layer in action.layers for strip in layer.strips
-                      for bag in strip.channelbags for fc in bag.fcurves]
-        else:
-            curves = list(action.fcurves)
-        for fc in curves:
-            for point in fc.keyframe_points:
-                point.interpolation = "LINEAR"
+                quaternions[name][t] = basis.to_quaternion()
+                if name in locations:
+                    locations[name][t] = basis.translation
+        for _, name in keyed:
+            values = quaternions[name]
+            # Keep consecutive quaternions in one hemisphere for clean interpolation.
+            flips = np.cumsum(np.einsum("ij,ij->i", values[1:], values[:-1]) < 0) % 2
+            values[1:][flips == 1] *= -1
+            pose = rig.pose.bones[name]
+            pose.rotation_mode = "QUATERNION"
+            if name not in locations:
+                pose.location = (0, 0, 0)
+            pose.scale = (1, 1, 1)
+            channels = [("rotation_quaternion", values)]
+            if name in locations:
+                channels.append(("location", locations[name]))
+            for prop, data in channels:
+                path = pose.path_from_id(prop)
+                for index in range(data.shape[1]):
+                    write_curve(action, rig, path, index, name, times, data[:, index])
         if old_action:
             old_action.use_fake_user = True
         scene.frame_end = max(scene.frame_end, int(np.ceil(start_frame + (frames - 1) * ratio)))

@@ -1,6 +1,6 @@
 bl_info = {
     "name": "UniMate Motion", "author": "Nopeburger",
-    "version": (0, 3, 0), "blender": (4, 2, 0),
+    "version": (0, 4, 0), "blender": (4, 2, 0),
     "location": "3D View > Sidebar > UniMate", "category": "Animation",
     "description": "Local text-to-motion for simple human and creature deform rigs",
 }
@@ -17,6 +17,8 @@ from .rig import armature_for, export_skeleton, export_ground, apply_result
 from . import clips
 
 _job = None
+# Persistent inference worker: dict(process, log, key, last_used, idle).
+_server = None
 
 def selected_rig(context):
     return context.scene.unimate_motion.rig or armature_for(context.object)
@@ -46,6 +48,12 @@ class UniMateSettings(bpy.types.PropertyGroup):
     fps: FloatProperty(name="Motion FPS", default=30, min=1, max=120, description="Playback interpretation; the source training clips use varying frame rates")
     seed: IntProperty(name="Seed", default=10, min=0)
     guidance: FloatProperty(name="Text guidance", default=3, min=1.01, max=20)
+    extend_clips: BoolProperty(name="Generate long clips in full", default=True,
+        description="Chain extra model windows so clips longer than 60 frames get new motion; off stretches one window over the clip")
+    keep_loaded: BoolProperty(name="Keep model loaded", default=True,
+        description="Keep the inference worker running between generations to skip model loading; it uses GPU memory while loaded")
+    idle_minutes: IntProperty(name="Unload after (minutes)", default=15, min=1, max=240,
+        description="Stop the loaded worker after this long without a generation")
     start_frame: IntProperty(name="Start frame", default=1)
     status: StringProperty(default="Select a deform rig and describe its motion")
     job_dir: StringProperty(subtype="DIR_PATH")
@@ -57,23 +65,82 @@ def refresh():
             if area.type == "VIEW_3D":
                 area.tag_redraw()
 
+def end_process(process, close_stdin=False):
+    if close_stdin and process.stdin:
+        try:
+            process.stdin.close()
+            process.wait(timeout=3)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+    if process.poll() is None:
+        process.terminate()
+        try:
+            process.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=3)
+
+def stop_server():
+    global _server
+    if _server:
+        end_process(_server["process"], close_stdin=True)
+        _server["log"].close()
+        _server = None
+
 def stop_job():
     global _job
     if _job:
-        process = _job["process"]
-        if process.poll() is None:
-            process.terminate()
-            try:
-                process.wait(timeout=3)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait(timeout=3)
-        _job["log"].close()
+        if _job.get("server"):
+            # Cancelling a served job stops the worker; the next run loads again.
+            stop_server()
+        else:
+            end_process(_job["process"])
+            _job["log"].close()
         _job = None
+
+def server_idle():
+    if not _server:
+        return None
+    if _job is None and time.monotonic() - _server["last_used"] > _server["idle"]:
+        stop_server()
+        refresh()
+        return None
+    return 30.
+
+def submit_to_server(python, worker, folder, idle_minutes):
+    """Send a job to the persistent worker, starting it if needed."""
+    global _server
+    key = (str(python), str(worker))
+    if _server and (_server["key"] != key or _server["process"].poll() is not None):
+        stop_server()
+    if not _server:
+        log = (worker.parents[1] / "outputs" / "worker-server.log").open("w", encoding="utf-8")
+        try:
+            process = subprocess.Popen(
+                [str(python), "-u", str(worker), "--serve"], stdin=subprocess.PIPE,
+                cwd=tempfile.gettempdir(), stdout=log, stderr=subprocess.STDOUT,
+                text=True, encoding="utf-8", creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        except Exception:
+            log.close()
+            raise
+        _server = dict(process=process, log=log, key=key)
+        if not bpy.app.timers.is_registered(server_idle):
+            bpy.app.timers.register(server_idle, first_interval=30., persistent=True)
+    _server.update(last_used=time.monotonic(), idle=idle_minutes * 60)
+    job = dict(request=str(folder / "request.json"), output=str(folder / "motion.npz"),
+               status=str(folder / "status.json"), log=str(folder / "worker.log"))
+    try:
+        _server["process"].stdin.write(json.dumps(job) + "\n")
+        _server["process"].stdin.flush()
+    except OSError:
+        stop_server()
+        raise ValueError("The loaded UniMate worker stopped; generate again to restart it.")
+    return _server["process"]
 
 @persistent
 def before_load(_):
     stop_job()
+    stop_server()
     if bpy.app.timers.is_registered(poll_job):
         bpy.app.timers.unregister(poll_job)
 
@@ -90,7 +157,18 @@ def poll_job():
             status = json.loads(status_path.read_text(encoding="utf-8"))
             settings.status = status["message"][:220]
         code = job["process"].poll()
-        if code is None:
+        if job.get("server"):
+            # The served worker keeps running; the status file marks the end of a job.
+            finished = status.get("state") in ("complete", "failed")
+            if not finished and code is None:
+                refresh()
+                return .5
+            if _server:
+                _server["last_used"] = time.monotonic()
+            code = 0 if status.get("state") == "complete" else 1
+            if not finished:
+                stop_server()
+        elif code is None:
             refresh()
             return .5
         if job.get("kind") == "pose":
@@ -109,7 +187,8 @@ def poll_job():
             settings.status = status.get("message", "Motion ready - Apply Motion")[:220]
         elif not status_path.is_file() or status.get("state") != "failed":
             settings.status = "Generation failed; see worker.log in the job folder"
-        job["log"].close()
+        if not job.get("server"):
+            job["log"].close()
         _job = None
     except (ReferenceError, AttributeError):
         stop_job()
@@ -186,23 +265,31 @@ class UNIMATE_OT_generate(bpy.types.Operator):
             if settings.mode == "TIMELINE":
                 request.update(clips.collect_schedule(settings, skeleton, context.scene))
                 request.update(transition_frames=settings.transition_frames,
-                               pose_approach_frames=settings.pose_approach_frames)
+                               pose_approach_frames=settings.pose_approach_frames,
+                               extend_clips=settings.extend_clips)
                 request["prompt"] = " / ".join(c["prompt"] for c in request["clips"])
             (folder / "request.json").write_text(json.dumps(request, indent=2), encoding="utf-8")
-            log = (folder / "worker.log").open("w", encoding="utf-8")
-            try:
-                process = subprocess.Popen(
-                    [str(python), "-u", str(worker), "--request", str(folder / "request.json"),
-                     "--output", str(folder / "motion.npz"), "--status", str(folder / "status.json")],
-                    cwd=tempfile.gettempdir(), stdout=log, stderr=subprocess.STDOUT,
-                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-            except Exception:
-                log.close()
-                raise
+            if settings.keep_loaded:
+                loaded = _server is not None and _server["process"].poll() is None
+                process = submit_to_server(python, worker, folder, settings.idle_minutes)
+                _job = dict(process=process, server=True, directory=folder, scene=context.scene)
+                settings.status = "Sending to loaded UniMate" if loaded else "Starting local UniMate"
+            else:
+                stop_server()
+                log = (folder / "worker.log").open("w", encoding="utf-8")
+                try:
+                    process = subprocess.Popen(
+                        [str(python), "-u", str(worker), "--request", str(folder / "request.json"),
+                         "--output", str(folder / "motion.npz"), "--status", str(folder / "status.json")],
+                        cwd=tempfile.gettempdir(), stdout=log, stderr=subprocess.STDOUT,
+                        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+                except Exception:
+                    log.close()
+                    raise
+                _job = dict(process=process, log=log, directory=folder, scene=context.scene)
+                settings.status = "Starting local UniMate"
             settings.rig = rig
             settings.job_dir = str(folder)
-            settings.status = "Starting local UniMate"
-            _job = dict(process=process, log=log, directory=folder, scene=context.scene)
             if not bpy.app.timers.is_registered(poll_job):
                 bpy.app.timers.register(poll_job, first_interval=.5)
             return {"FINISHED"}
@@ -217,6 +304,19 @@ class UNIMATE_OT_cancel(bpy.types.Operator):
     def execute(self, context):
         stop_job()
         context.scene.unimate_motion.status = "Generation cancelled"
+        refresh()
+        return {"FINISHED"}
+
+class UNIMATE_OT_unload(bpy.types.Operator):
+    bl_idname = "unimate.unload"
+    bl_label = "Unload Model"
+    bl_description = "Stop the loaded inference worker and free its memory"
+    @classmethod
+    def poll(cls, context):
+        return _job is None and _server is not None
+    def execute(self, context):
+        stop_server()
+        context.scene.unimate_motion.status = "Model unloaded"
         refresh()
         return {"FINISHED"}
 
@@ -267,6 +367,7 @@ class UNIMATE_PT_main(bpy.types.Panel):
             layout.prop(settings, "seed")
             layout.prop(settings, "transition_frames")
             layout.prop(settings, "pose_approach_frames")
+            layout.prop(settings, "extend_clips")
         else:
             layout.prop(settings, "prompt", text="")
             row = layout.row(align=True)
@@ -289,12 +390,17 @@ class UNIMATE_PT_main(bpy.types.Panel):
             layout.prop(settings, "guidance")
             layout.prop(settings, "fps")
             layout.prop(settings, "overlap")
+            layout.prop(settings, "keep_loaded")
+            row = layout.row(align=True)
+            row.enabled = settings.keep_loaded
+            row.prop(settings, "idle_minutes")
+            row.operator("unimate.unload", text="", icon="X")
             layout.prop(settings, "project")
             layout.prop(settings, "experiment")
             layout.prop(settings, "job_dir", text="Last job")
         layout.label(text="Experimental • simple deform rigs", icon="INFO")
 
-classes = clips.CLASSES + (UniMateSettings, UNIMATE_OT_validate, UNIMATE_OT_generate, UNIMATE_OT_cancel, UNIMATE_OT_apply, UNIMATE_PT_main)
+classes = clips.CLASSES + (UniMateSettings, UNIMATE_OT_validate, UNIMATE_OT_generate, UNIMATE_OT_cancel, UNIMATE_OT_unload, UNIMATE_OT_apply, UNIMATE_PT_main)
 
 def register():
     for cls in classes:
@@ -305,8 +411,10 @@ def register():
 def unregister():
     clips.cleanup()
     stop_job()
-    if bpy.app.timers.is_registered(poll_job):
-        bpy.app.timers.unregister(poll_job)
+    stop_server()
+    for timer in (poll_job, server_idle):
+        if bpy.app.timers.is_registered(timer):
+            bpy.app.timers.unregister(timer)
     if before_load in bpy.app.handlers.load_pre:
         bpy.app.handlers.load_pre.remove(before_load)
     del bpy.types.Scene.unimate_motion
