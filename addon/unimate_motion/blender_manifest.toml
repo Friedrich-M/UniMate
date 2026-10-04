@@ -1,6 +1,6 @@
 schema_version = "1.0.0"
 id = "unimate_motion"
-version = "0.5.0"
+version = "0.6.0"
 name = "UniMate Motion"
 tagline = "Generate motion for deform rigs with local UniMate inference"
 maintainer = "Nopeburger"

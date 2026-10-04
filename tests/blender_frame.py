@@ -48,12 +48,12 @@ for ra, rb in zip(a["rest_matrices"], b["rest_matrices"]):
     if ra is not None:
         assert np.allclose(np.asarray(ra)[:3, :3], np.asarray(rb)[:3, :3], atol=1e-5), "Rest rotations differ"
 assert [c["joint"] for c in a["collision_capsules"]] == [c["joint"] for c in b["collision_capsules"]]
-assert np.allclose([c["radius"] for c in a["collision_capsules"]], [c["radius"] for c in b["collision_capsules"]], atol=1e-5)
+assert np.allclose([c["radius"] for c in a["collision_capsules"]], [c["radius"] for c in b["collision_capsules"]], atol=2e-3)  # round limbs: either cross-section axis
 assert [p["joint"] for p in a["foot_profiles"]] == [p["joint"] for p in b["foot_profiles"]]
 assert facing_from_feet(a) == facing_from_feet(b) == "-Y", facing_from_feet(b)
 ga, gb = export_ground(reference, a), export_ground(mixamo, b)
 assert np.allclose(ga["normal"], [0, 0, 1]) and np.allclose(gb["normal"], [0, 0, 1])
-assert abs(ga["height"] - gb["height"]) < 1e-5
+assert abs(ga["height"] - gb["height"]) < 2e-3  # from foot capsule radii
 
 # Finger exclusion drops finger bones and their children, nothing else.
 names = {name for name, *_ in human_bones()}
@@ -117,6 +117,30 @@ for rig, skeleton in ((reference, a), (mixamo, b)):
     heads.append(np.array([rig.matrix_world @ rig.pose.bones[n].head for n in skeleton["bone_names"] if n]))
 assert np.allclose(heads[0], heads[1], atol=1e-4), "Estimate preview differs"
 
+# Unweighted helper leaves (like Mixamo's *_End bones) are left out.
+bpy.context.view_layer.objects.active = reference
+bpy.ops.object.mode_set(mode="EDIT")
+head = reference.data.edit_bones["head"]
+end = reference.data.edit_bones.new("head_end")
+end.head, end.tail, end.parent = head.tail, head.tail + (head.tail - head.head) * .5, head
+bpy.ops.object.mode_set(mode="OBJECT")
+with_end = export_skeleton(reference)
+assert "head_end" not in with_end["bone_names"] and with_end["signature"] == a["signature"]
+
+# A wide, shallow body gets a capsule as thick as its depth, not its width.
+wide = make_rig("Frame Wide", [("root", (0, 0, 0), (0, 0, .2), None, .04),
+                               ("body", (0, 0, .2), (0, 0, .6), "root", .04)],
+                (6, 0, 0), material("Frame Grey", (.5, .5, .5)), collection)
+bpy.ops.mesh.primitive_cube_add(size=1, location=(6, 0, .4))
+slab = bpy.context.object
+slab.scale = (.6, .1, .3)
+bpy.ops.object.transform_apply(scale=True)
+slab.vertex_groups.new(name="body").add(range(len(slab.data.vertices)), 1., "REPLACE")
+slab.modifiers.new("Deform", "ARMATURE").object = wide
+capsules = {c["joint"]: c for c in export_skeleton(wide)["collision_capsules"]}
+body = export_skeleton(wide)["bone_names"].index("body")
+assert capsules[body]["radius"] < .07, capsules[body]["radius"]  # depth 0.05 (+ bone mesh); width would be 0.3
+
 # Non-uniform object scale is rejected instead of silently distorting.
 mixamo.scale = (.01, .02, .01)
 bpy.context.view_layer.update()
@@ -127,7 +151,8 @@ except ValueError:
     pass
 report = dict(passed=["identity frame unchanged", "Y-up scaled export matches", "ground export",
                       "finger exclusion", "apply in world space", "capture round trip",
-                      "estimate preview", "facing from feet", "non-uniform scale rejected"])
+                      "estimate preview", "facing from feet", "unweighted end bones skipped",
+                      "capsule fits the narrow side", "non-uniform scale rejected"])
 (out / "frame-blender.json").write_text(json.dumps(report, indent=2))
 print("FRAME_BLENDER_PASSED", json.dumps(report))
 unimate_motion.unregister()

@@ -1,6 +1,6 @@
 bl_info = {
     "name": "UniMate Motion", "author": "Nopeburger",
-    "version": (0, 5, 0), "blender": (4, 2, 0),
+    "version": (0, 6, 0), "blender": (4, 2, 0),
     "location": "3D View > Sidebar > UniMate", "category": "Animation",
     "description": "Local text-to-motion for simple human and creature deform rigs",
 }
@@ -41,6 +41,8 @@ class UniMateSettings(bpy.types.PropertyGroup):
     rig: PointerProperty(name="Rig", type=bpy.types.Object, poll=lambda self, obj: obj.type == "ARMATURE")
     project: StringProperty(name="Project folder", subtype="DIR_PATH", default="")
     experiment: StringProperty(name="Model folder", subtype="DIR_PATH", default="")
+    human_model: BoolProperty(name="Mixamo model for humans", default=True,
+        description="For Human characters, use the Mixamo-only checkpoint (unimate_mixamo_f60, installed beside the model folder) when the rig fits its 22-joint limit")
     prompt: StringProperty(name="Motion", default="A human walks forward at a steady pace.")
     forward: EnumProperty(name="Rig faces", items=[("-Y", "-Y", ""), ("Y", "+Y", ""), ("X", "+X", ""), ("-X", "-X", "")], default="-Y",
         description="World direction the character faces in its rest pose; the armature object's rotation is taken into account")
@@ -202,6 +204,32 @@ def poll_job():
     refresh()
     return None
 
+HUMAN_MODEL = "unimate_mixamo_f60"  # Mixamo-only checkpoint, next to the general model
+
+def model_limits(folder):
+    path = folder / "config.json"
+    if not path.is_file():
+        return None
+    dataset = json.loads(path.read_text())["dataset"]
+    return dataset.get("min_joints", 5), dataset["max_joints"]
+
+def choose_model(settings, joints):
+    """Return (model folder, label, note). Humans use the Mixamo-only model when
+    it is installed beside the general model and the rig fits its joint limit."""
+    general = Path(bpy.path.abspath(settings.experiment)).resolve()
+    if settings.family != "mixamo" or not settings.human_model:
+        return general, "general model", ""
+    human = general.parent / HUMAN_MODEL
+    limits = model_limits(human)
+    if limits is None:
+        return general, "general model", ""
+    if limits[0] <= joints <= limits[1]:
+        return human, "Mixamo model", ""
+    options = [name for name, on in (("Animate finger bones", settings.fingers),
+                                     ("Animate terminal bones", settings.tips)) if on]
+    advice = f"; turn off {' or '.join(options)} to use it" if options else ""
+    return general, "general model", f"The Mixamo model allows {limits[1]} joints{advice}"
+
 def joint_hint(settings):
     options = [name for name, on in (("Animate finger bones", settings.fingers),
                                      ("Animate terminal bones", settings.tips)) if on]
@@ -228,17 +256,20 @@ class UNIMATE_OT_validate(bpy.types.Operator):
         settings = context.scene.unimate_motion
         try:
             data = export_skeleton(selected_rig(context), settings.forward, settings.tips, settings.fingers)
-            path = Path(bpy.path.abspath(settings.experiment)) / "config.json"
-            limit = json.loads(path.read_text())["dataset"]["max_joints"] if path.is_file() else 71
             count = len(data["parents"])
+            folder, label, note = choose_model(settings, count)
+            limit = (model_limits(folder) or (5, 71))[1]
             if count > limit:
                 raise ValueError(f"{count} joints exceed this model's {limit}-joint limit. " + joint_hint(settings))
             if count < 5:
                 raise ValueError("This model requires at least 5 joints.")
-            settings.status = f"Rig ready: {len([n for n in data['bone_names'] if n])} bones, {count}/{limit} model joints"
+            settings.status = f"Rig ready: {len([n for n in data['bone_names'] if n])} bones, {count}/{limit} joints, {label}"
+            warnings = [note] if note else []
             facing = facing_from_feet(data)
             if facing and facing != settings.forward:
-                settings.status += f". Feet point {facing.replace('Y', '+Y').replace('X', '+X').replace('-+', '-')}; check Rig faces"
+                warnings.append(f"Feet point {facing.replace('Y', '+Y').replace('X', '+X').replace('-+', '-')}; check Rig faces")
+            if warnings:
+                settings.status += ". " + ". ".join(warnings)
                 self.report({"WARNING"}, settings.status)
                 return {"FINISHED"}
             self.report({"INFO"}, settings.status)
@@ -264,7 +295,7 @@ class UNIMATE_OT_generate(bpy.types.Operator):
             if not settings.project.strip() or not settings.experiment.strip():
                 raise ValueError("Set Project folder and Model folder in Advanced settings.")
             root = Path(bpy.path.abspath(settings.project)).resolve()
-            exp = Path(bpy.path.abspath(settings.experiment)).resolve()
+            exp, _, _ = choose_model(settings, len(skeleton["parents"]))
             python = root / ".venv" / "Scripts" / "python.exe"
             if not python.is_file():
                 python = root / ".venv" / "bin" / "python"
@@ -427,6 +458,7 @@ class UNIMATE_PT_main(bpy.types.Panel):
             row.operator("unimate.unload", text="", icon="X")
             layout.prop(settings, "project")
             layout.prop(settings, "experiment")
+            layout.prop(settings, "human_model")
             layout.prop(settings, "job_dir", text="Last job")
         layout.label(text="Experimental • simple deform rigs", icon="INFO")
 

@@ -30,6 +30,17 @@ def export_frame(rig):
         raise ValueError("Use a uniform, positive armature object scale (apply non-uniform or mirrored scale first).")
     return linear, linear / scale.mean()
 
+def weighted_bones(rig):
+    """Names of bones with nonzero skin weights on meshes bound to rig."""
+    names = set()
+    for obj in bpy.context.scene.objects:
+        if obj.type != "MESH" or obj.find_armature() != rig:
+            continue
+        groups = {g.index: g.name for g in obj.vertex_groups}
+        for v in obj.data.vertices:
+            names.update(groups[g.group] for g in v.groups if g.weight > 0 and g.group in groups)
+    return names
+
 def is_finger(bone):
     words = re.sub(r"\d+", " ", semantic_name(bone.get("unimate_label", bone.name))).split()
     return bool(FINGER_WORDS & set(words))
@@ -59,8 +70,14 @@ def mesh_capsules(rig, skeleton):
         direction = direction / np.linalg.norm(direction)
         offsets = np.asarray(values) @ linear.T - head
         axial = offsets@direction
-        radial = np.linalg.norm(offsets-axial[:,None]*direction,axis=1)
-        radius = float(np.quantile(radial,.98))
+        radial = offsets-axial[:,None]*direction
+        # Fit the narrow side of the cross-section. A round limb keeps its
+        # radius; a wide, shallow region (chest, clavicle, pelvis) gets its
+        # depth instead of its width, so arms are not pushed off the body.
+        _, axes = np.linalg.eigh(radial.T @ radial)
+        minor = axes[:, 1]  # eigenvalues ascend; axes[:, 0] is the bone axis
+        radius = float(min(np.quantile(np.abs(radial @ minor), .98),
+                           np.quantile(np.linalg.norm(radial, axis=1), .98)))
         if radius < 1e-6:
             continue
         low, high = float(axial.min()+radius), float(axial.max()-radius)
@@ -145,6 +162,13 @@ def export_skeleton(rig, forward="-Y", tips=True, fingers=True):
             bone = bone.parent
         return False
     selected = {b.name for b in rig.data.bones if b.use_deform and (fingers or not excluded(b))}
+    # Unweighted helper bones (such as Mixamo's *_End leaves) carry no skin;
+    # leave them out unless a weighted bone hangs below them.
+    weighted = weighted_bones(rig)
+    if weighted:
+        def carries_skin(bone):
+            return bone.name in weighted or any(carries_skin(c) for c in bone.children)
+        selected = {name for name in selected if carries_skin(rig.data.bones[name])}
     if not selected:
         raise ValueError("The armature has no deform bones.")
     for name in list(selected):
