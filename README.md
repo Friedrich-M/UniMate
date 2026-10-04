@@ -21,8 +21,8 @@ Inference runs in a separate Python environment. Blender's Python does not need 
 ## Install
 
 1. Clone this fork: `git clone https://github.com/nopeburger/UniMate-B3D.git` and enter `UniMate-B3D`.
-2. With Python 3.10 available through the Windows `py` launcher, run `powershell -ExecutionPolicy Bypass -File .\scripts\setup.ps1` from the repository root. You can pass `-Python <path-to-python-3.10>` if needed. This creates `.venv` and downloads the UniMate and human-pose models into `models/`.
-3. In Blender, choose **Edit → Preferences → Get Extensions → Install from Disk** (or **Add-ons → Install from Disk**, depending on Blender version), select [`dist/unimate_motion-0.5.0.zip`](dist/unimate_motion-0.5.0.zip), and enable **UniMate Motion**.
+2. With Python 3.10 available through the Windows `py` launcher, run `powershell -ExecutionPolicy Bypass -File .\scripts\setup.ps1` from the repository root. You can pass `-Python <path-to-python-3.10>` if needed. This creates `.venv` and downloads the general UniMate model, the Mixamo-only UniMate model and the human-pose model into `models/` (about 2.2 GB).
+3. In Blender, choose **Edit → Preferences → Get Extensions → Install from Disk** (or **Add-ons → Install from Disk**, depending on Blender version), select [`dist/unimate_motion-0.6.0.zip`](dist/unimate_motion-0.6.0.zip), and enable **UniMate Motion**.
 4. In the 3D View, open the sidebar with **N**, select **UniMate**, and expand **Setup and generation settings**. Set **Project folder** to the cloned repository root and **Model folder** to `models/unimate_uniml3d_f60_v2` inside that root. These paths are local settings and are not bundled in the demo.
 
 To build the add-on ZIP from source instead, run `python scripts/package.py`. Its package is intentionally small; the backend and weights stay in the cloned project.
@@ -37,7 +37,7 @@ The [Blender add-on panel guide](docs/BLENDER_ADDON_GUIDE.md) explains every con
 
 ## Generate motion
 
-1. Select a simple, single-root deform armature, or assign it in **Rig**. Choose **Human**, **Animal / Creature**, or **Other articulated model**, set the world direction the character faces at rest, and click **Check Rig**. Imported rigs such as Mixamo FBX files work as imported (Y-up, 0.01 scale); for rigs with full hands, turn off **Animate finger bones** to stay within the model's joint limit.
+1. Select a simple, single-root deform armature, or assign it in **Rig**. Choose **Human**, **Animal / Creature**, or **Other articulated model**, set the world direction the character faces at rest, and click **Check Rig**. Imported rigs such as Mixamo FBX files work as imported (Y-up, 0.01 scale); for rigs with full hands, turn off **Animate finger bones** to stay within the model's joint limit. For **Human** rigs that fit in 22 joints, the add-on uses the Mixamo-only model, which gives clearly better human motion than the general model; for a Mixamo character, turn off **Animate finger bones** and **Animate terminal bones** to get there. **Check Rig** reports which model will be used.
 2. For one motion, choose **Single prompt**, enter the prompt, frame count, and start frame. For a sequence, choose **Prompt timeline** and add prompt clips with inclusive, consecutive frame ranges. There can be no gaps or overlaps. The model generates 60-frame windows; a clip longer than one window gets chained windows, so it contains new motion rather than a slowed-down copy (turn off **Generate long clips in full** to stretch one window instead).
 3. Optionally assign a static **Ground mesh** in the advanced settings. **Motion cleanup** is enabled by default and estimates self-collisions, ground penetration, stance, foot/paw tilt, and support-limb bend from the rig's weighted meshes.
 4. Click **Generate Motion**. Blender remains interactive while the local backend runs. When the status reports that motion is ready, click **Apply Motion**. This creates a new Action; save your `.blend` file.
@@ -52,7 +52,7 @@ Each prompt clip can contain one or more reference images assigned to target fra
 
 ## Scope and limits
 
-This is an experimental adapter for **simple deform-bone human and creature rigs**. Active pose constraints, drivers, NLA tracks, and control rigs are not supported directly. The downloaded v2 checkpoint permits at most **71 model joints**, counting virtual terminal joints. The armature object needs a uniform, positive scale. Motion cleanup uses capsule proxies derived from skin weights and heuristic foot contact; it is not a physics simulation and cannot guarantee collision-free output on every mesh. Contact uncertainty is reported in job results. Creature pose images are manually matched in this version.
+This is an experimental adapter for **simple deform-bone human and creature rigs**. Active pose constraints, drivers, NLA tracks, and control rigs are not supported directly. Deform bones without any skin weights (such as Mixamo's `_End` helper bones) are left out of the export. The downloaded v2 checkpoint permits at most **71 model joints**, counting virtual terminal joints. The armature object needs a uniform, positive scale. Motion cleanup uses capsule proxies derived from skin weights and heuristic foot contact; it is not a physics simulation and cannot guarantee collision-free output on every mesh. Contact uncertainty is reported in job results. Creature pose images are manually matched in this version.
 
 The backend builds UniMate conditioning from the Blender rest skeleton and uses upstream model/sampler code without editing the upstream source. See [the original README](docs/UPSTREAM_README.md) and [the UniMate project](https://github.com/Friedrich-M/UniMate) for the underlying research and model.
 
