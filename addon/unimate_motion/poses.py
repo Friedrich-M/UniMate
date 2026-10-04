@@ -3,7 +3,7 @@ import json
 import re
 import numpy as np
 from mathutils import Matrix, Vector
-from .motion import canonicalize, semantic_name
+from .motion import canonicalize, encode_pose, semantic_name
 
 ROLES = ("hips", "spine", "chest", "neck", "head",
          "left_upper_arm", "left_forearm", "left_hand", "right_upper_arm", "right_forearm", "right_hand",
@@ -30,12 +30,11 @@ def auto_mapping(rig):
     return mapping
 
 def capture_pose(rig, skeleton):
-    canon = canonicalize(skeleton)
-    basis, scale, origin = canon["basis"], canon["scale"], canon["origin"]
-    parents = canon["parents"]
+    """Read the current pose in armature space and encode it with encode_pose."""
+    parents = skeleton["parents"]
     count = len(parents)
     positions = np.zeros((count, 3))
-    global_delta = np.tile(np.eye(3), (count, 1, 1))
+    rotations = np.tile(np.eye(3), (count, 1, 1))
     for j, name in enumerate(skeleton["bone_names"]):
         if name:
             bone, pose = rig.data.bones[name], rig.pose.bones[name]
@@ -44,27 +43,12 @@ def capture_pose(rig, skeleton):
             if bone.parent and not np.allclose(pose.location, (0,0,0), atol=1e-4):
                 raise ValueError("Non-root bone translations cannot be represented by this motion model.")
             positions[j] = np.asarray(pose.head)
-            delta = np.array(pose.matrix.to_3x3()) @ np.array(bone.matrix_local.to_3x3()).T
-            global_delta[j] = basis @ delta @ basis.T
+            rotations[j] = np.array(pose.matrix.to_3x3()) @ np.array(bone.matrix_local.to_3x3()).T
         else:
             parent = parents[j]
             positions[j] = np.asarray(rig.pose.bones[skeleton["bone_names"][parent]].tail)
-            global_delta[j] = global_delta[parent]
-    positions = (positions @ basis.T - origin) * scale
-    local = global_delta.copy()
-    for j, parent in enumerate(parents[1:], 1):
-        local[j] = global_delta[parent].T @ global_delta[j]
-    direction = global_delta[0] @ np.array([0.,0.,1.])
-    yaw = np.arctan2(direction[0], direction[2])
-    c, s = np.cos(yaw), np.sin(yaw)
-    facing = np.array([[c,0,-s],[0,1,0],[s,0,c]])
-    positions[:, [0,2]] -= positions[0, [0,2]]
-    features = np.zeros((count, 12))
-    features[:, :3] = positions @ facing.T
-    features[0, 3:9] = np.concatenate([facing[:,0], facing[:,1]])
-    for j, parent in enumerate(parents[1:], 1):
-        features[j, 3:9] = np.concatenate([local[parent,:,0], local[parent,:,1]])
-    return dict(signature=skeleton["signature"], features=features.tolist())
+            rotations[j] = rotations[parent]
+    return encode_pose(positions, rotations, skeleton)
 
 def preview_estimate(rig, skeleton, estimate, mapping, threshold=.5):
     canon = canonicalize(skeleton)

@@ -1,27 +1,54 @@
 """Prompt chaining and exact frame-range retiming for the UniMate worker."""
 import numpy as np
 
-def pose_slot(clip, reference, offset, length):
-    usable = length - offset
-    return offset + int(round((reference["frame"] - clip["start"]) /
-                              (clip["end"] - clip["start"]) * (usable - 1)))
+def native_index(clip, reference, length):
+    """Generated frame (0..length-1) that a reference frame maps to within its clip."""
+    return int(round((reference["frame"] - clip["start"]) /
+                     (clip["end"] - clip["start"]) * (length - 1)))
 
-def constraints(previous, clip, shape, overlap, mean, std, device):
+
+def plan_windows(clips, window, overlap, extend=True):
+    """Split clips into chained model windows.
+
+    The first window of the sequence yields `window` new frames; every later
+    window repeats the previous window's last `overlap` frames as context and
+    yields `window - overlap` new ones. With `extend`, a clip gets as many
+    windows as its duration needs, so long clips gain motion instead of being
+    stretched. Returns [(clip_index, {window_slot: reference})].
+    """
+    step = window - overlap
+    plan = []
+    for index, clip in enumerate(clips):
+        head = window if index == 0 else step
+        duration = clip["end"] - clip["start"] + 1
+        count = max(1, 1 + int(round((duration - head) / step))) if extend else 1
+        length = head + step * (count - 1)
+        native = {}
+        for reference in clip.get("references", []):
+            n = native_index(clip, reference, length)
+            if n in native:
+                raise ValueError("Pose references are too close together for the generated frames; move them apart.")
+            native[n] = reference
+        cursor = 0
+        for w in range(count):
+            first_slot = 0 if index == 0 and w == 0 else overlap
+            new = window - first_slot
+            slots = {first_slot + n - cursor: ref for n, ref in native.items() if cursor <= n < cursor + new}
+            plan.append((index, slots))
+            cursor += new
+    return plan
+
+
+def constraints(previous, slots, shape, overlap, mean, std, device):
     import torch
-    offset = overlap if previous is not None else 0
-    if previous is None and not clip.get("references"):
+    if previous is None and not slots:
         return None, None
     known = torch.zeros(shape, device=device)
     mask = torch.zeros(shape, device=device, dtype=torch.bool)
     if previous is not None:
         known[..., :overlap] = previous[..., -overlap:]
         mask[..., :overlap] = True
-    used = set()
-    for reference in clip.get("references", []):
-        slot = pose_slot(clip, reference, offset, shape[-1])
-        if slot in used:
-            raise ValueError("Pose references are too close together for the 60-frame model window.")
-        used.add(slot)
+    for slot, reference in slots.items():
         feature = np.asarray(reference["pose"]["features"], dtype=np.float32)
         if feature.shape != mean.shape or not np.isfinite(feature).all():
             raise ValueError("Invalid captured pose features.")
@@ -124,22 +151,20 @@ def finish_motion(root, local, clips, skeleton, transition_frames, pose_approach
     return forward_kinematics(root, local, skeleton)
 
 
-def retime(positions, rotations, spans, clips, overlap, model_length, skeleton,
+def retime(positions, rotations, spans, clips, skeleton,
            transition_frames=12, pose_approach_frames=60):
+    """Resample each clip's generated frames (spans) onto its frame range."""
     from scipy.spatial.transform import Rotation, Slerp
     if not 0 <= transition_frames <= 120 or not 0 <= pose_approach_frames <= 600:
         raise ValueError("Invalid transition or pose approach duration.")
     local = to_local(rotations, skeleton["parents"])
     all_root, all_local = [], []
-    for index, ((begin, end), clip) in enumerate(zip(spans, clips)):
+    for (begin, end), clip in zip(spans, clips):
         root, rot = positions[begin:end, 0], local[begin:end]
         duration = clip["end"] - clip["start"] + 1
-        offset = overlap if index else 0
         knots = {0: 0, duration-1: len(root)-1}
         for ref in clip.get("references", []):
-            target = ref["frame"] - clip["start"]
-            source = pose_slot(clip, ref, offset, model_length) - offset
-            knots[target] = source
+            knots[ref["frame"] - clip["start"]] = native_index(clip, ref, len(root))
         destinations = np.array(sorted(knots))
         sources = np.array([knots[i] for i in destinations])
         if np.any(np.diff(sources) <= 0):

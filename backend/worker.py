@@ -14,6 +14,8 @@ import time
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 os.environ.setdefault("HF_HOME", str(ROOT / "cache" / "huggingface"))
+# Upstream Friedrich-M/UniMate commit merged into unimate/; update after each upstream merge.
+UPSTREAM_COMMIT = "2c5b384715aa63d8639b1ed7eb74bfe614570c7a"
 
 def load_geometry():
     spec = importlib.util.spec_from_file_location("unimate_geometry", ROOT / "addon" / "unimate_motion" / "motion.py")
@@ -86,16 +88,47 @@ def build_condition(request, config, encoder, stats, device):
             for k, v in cond.items()}
     return motion.shape, cond, canonical, mean, std
 
+_loaded = {}
+
+def load_models(exp, config, checkpoint, device, status):
+    """Load the text encoder, model and transport; reuse them while serving."""
+    import torch
+    from unimate.models.factory import create_model, create_transport
+    from unimate.models.text_encoder.factory import create_text_encoder
+    from unimate.training.ema import EMAModel
+    key = (str(exp), str(checkpoint), str(device))
+    if _loaded.get("key") == key:
+        return _loaded["models"]
+    _loaded.clear()
+    if device.type == "cuda":
+        torch.cuda.empty_cache()
+    write_status(status, "running", f"Loading text encoder on {device} (first run may download it)")
+    encoder = create_text_encoder(
+        encoder_type=config.model.text_encoder_type,
+        encoder_version=config.model.text_encoder_version, device=str(device), pool=False)
+    write_status(status, "running", "Loading UniMate model and EMA weights")
+    model = create_model(config.dataset, config.model)
+    state = torch.load(checkpoint, map_location="cpu", weights_only=False)
+    model.load_state_dict(state.get("model_state_dict", state), strict=True)
+    if config.training.use_ema and "ema_state_dict" in state:
+        ema = EMAModel(model.parameters(), decay=config.training.ema_decay, use_ema_warmup=True)
+        ema.load_state_dict(state["ema_state_dict"])
+        ema.copy_to(model.parameters())
+        del ema
+    del state
+    model.to(device).eval()
+    models = (encoder, model, create_transport(training_config=config.training))
+    _loaded.update(key=key, models=models)
+    return models
+
 def generate(request, output, status):
     started = time.perf_counter()
     import numpy as np
     import torch
     from unimate.configs.schema import MainConfig
-    from unimate.models.factory import create_model, create_transport
     from unimate.models.flow.transport import Sampler
-    from unimate.models.text_encoder.factory import create_text_encoder
     from unimate.inference.generate import generate_samples
-    from unimate.training.ema import EMAModel
+    from timeline import constraints, plan_windows, retime
     if request.get("schema") != 1 or not request["prompt"].strip():
         raise ValueError("A valid request and a non-empty prompt are required.")
     exp = Path(request["experiment"]).resolve()
@@ -129,49 +162,36 @@ def generate(request, output, status):
         schedule.validate_clips(clips, request["skeleton"]["signature"])
     else:
         clips = [dict(prompt=request["prompt"], start=1, end=frames, references=[])]
-    write_status(status, "running", f"Loading text encoder on {device} (first run may download it)")
-    encoder = create_text_encoder(
-        encoder_type=config.model.text_encoder_type,
-        encoder_version=config.model.text_encoder_version, device=str(device), pool=False)
+    encoder, model, diffusion = load_models(exp, config, checkpoint, device, status)
     conditions = []
     for clip in clips:
         clip_request = dict(request, prompt=clip["prompt"])
         shape, cond, canonical, mean, std = build_condition(clip_request, config, encoder, stats, device)
         conditions.append(cond)
-    del encoder
-    if device.type == "cuda":
-        torch.cuda.empty_cache()
-    write_status(status, "running", "Loading UniMate model and EMA weights")
-    model = create_model(config.dataset, config.model)
-    state = torch.load(checkpoint, map_location="cpu", weights_only=False)
-    model.load_state_dict(state.get("model_state_dict", state), strict=True)
-    if config.training.use_ema and "ema_state_dict" in state:
-        ema = EMAModel(model.parameters(), decay=config.training.ema_decay, use_ema_warmup=True)
-        ema.load_state_dict(state["ema_state_dict"])
-        ema.copy_to(model.parameters())
-        del ema
-    del state
-    model.to(device).eval()
-    diffusion = create_transport(training_config=config.training)
-    from timeline import constraints, retime
     overlap = int(request.get("overlap", 10))
     if not 1 <= overlap < shape[-1]-1:
         raise ValueError("Transition context must be smaller than the model window.")
+    if request.get("clips"):
+        plan = plan_windows(clips, shape[-1], overlap, request.get("extend_clips", True))
+    else:
+        plan = [(0, {})]
     previous = None
-    parts, spans = [], []
+    parts, spans = [], [None] * len(clips)
     total = 0
     with torch.inference_mode():
-        for index, (clip, cond) in enumerate(zip(clips, conditions)):
-            write_status(status, "running", f"Generating prompt {index+1}/{len(clips)} on {device}")
-            known, mask = constraints(previous, clip, shape, overlap, mean, std, device)
+        for index, (clip_index, slots) in enumerate(plan):
+            write_status(status, "running", f"Generating window {index+1}/{len(plan)} "
+                         f"(prompt {clip_index+1}/{len(clips)}) on {device}")
+            known, mask = constraints(previous, slots, shape, overlap, mean, std, device)
             samples = generate_samples(
-                model, cond, shape, "flow", diffusion, Sampler(diffusion),
+                model, conditions[clip_index], shape, "flow", diffusion, Sampler(diffusion),
                 device=device, cfg_scale=cfg_scale, x1_known=known, keep_mask=mask)
             previous = samples
             part = samples if index == 0 else samples[..., overlap:]
             parts.append(part)
-            spans.append((total, total+part.shape[-1]))
+            begin = spans[clip_index][0] if spans[clip_index] else total
             total += part.shape[-1]
+            spans[clip_index] = (begin, total)
     samples = torch.cat(parts, dim=-1)
     joints = len(canonical["parents"])
     features = samples[0, :joints].permute(2, 0, 1).cpu().numpy()
@@ -180,8 +200,8 @@ def generate(request, output, status):
         features = features[:frames]
     positions, rotations = load_geometry().decode_features(features, canonical)
     if request.get("clips"):
-        positions, rotations = retime(positions, rotations, spans, clips, overlap, shape[-1],
-                                     request["skeleton"], request.get("transition_frames", 12),
+        positions, rotations = retime(positions, rotations, spans, clips, request["skeleton"],
+                                     request.get("transition_frames", 12),
                                      request.get("pose_approach_frames", 60))
     collision_report = {}
     if request.get("motion_cleanup", True):
@@ -194,10 +214,12 @@ def generate(request, output, status):
         np.savez_compressed(handle, schema=1, positions=positions, rotations=rotations,
             collision_report_json=json.dumps(collision_report),
             postprocess_json=json.dumps({"method": "local FK retiming, inertial joins, eased reference approaches", "transition_frames": request.get("transition_frames", 12), "pose_approach_frames": request.get("pose_approach_frames", 60)}) if request.get("clips") else "{}",
-            features=features, schedule_json=json.dumps(request.get("clips", [])), seconds=time.perf_counter()-started, signature=request["skeleton"]["signature"],
+            features=features, schedule_json=json.dumps(request.get("clips", [])),
+            windows_json=json.dumps([dict(clip=c, reference_slots=sorted(s)) for c, s in plan]),
+            seconds=time.perf_counter()-started, signature=request["skeleton"]["signature"],
             joint_names=np.asarray(request["skeleton"]["joint_names"]), fps=request["fps"],
             prompt=request["prompt"], seed=seed, checkpoint=str(checkpoint),
-            upstream_commit="5d6aabedd947297b5ba6706d8e9113e68c0c3e4f")
+            upstream_commit=UPSTREAM_COMMIT)
     temp.replace(output)
     message = "Motion ready — Apply Motion to create an Action"
     warnings=[]
@@ -209,20 +231,47 @@ def generate(request, output, status):
         message += " (review: " + ", ".join(warnings) + ")"
     write_status(status, "complete", message)
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--request", required=True, type=Path)
-    parser.add_argument("--output", required=True, type=Path)
-    parser.add_argument("--status", required=True, type=Path)
-    args = parser.parse_args()
+def run_job(request_path, output, status):
     try:
-        request = json.loads(args.request.read_text(encoding="utf-8"))
-        generate(request, args.output, args.status)
+        request = json.loads(Path(request_path).read_text(encoding="utf-8"))
+        generate(request, Path(output), Path(status))
     except Exception as exc:
         traceback.print_exc()
-        write_status(args.status, "failed", f"{type(exc).__name__}: {exc}")
+        write_status(Path(status), "failed", f"{type(exc).__name__}: {exc}")
         return 1
     return 0
+
+def serve():
+    """Keep models loaded and run one job per stdin line: JSON with request,
+    output, status and log paths. Exits at stdin EOF, when Blender closes,
+    unloads the model or reaches its idle timeout.
+
+    stdin is read only between jobs: on Windows, a read pending in another
+    thread blocks handle operations such as process creation during a job."""
+    import contextlib
+    print("UniMate worker serving", flush=True)
+    for line in sys.stdin:
+        if not line.strip():
+            continue
+        job = json.loads(line)
+        with open(job["log"], "w", encoding="utf-8") as log, \
+                contextlib.redirect_stdout(log), contextlib.redirect_stderr(log):
+            run_job(job["request"], job["output"], job["status"])
+        print("Finished", job["status"], flush=True)
+    return 0
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--request", type=Path)
+    parser.add_argument("--output", type=Path)
+    parser.add_argument("--status", type=Path)
+    parser.add_argument("--serve", action="store_true", help="Run jobs from stdin and keep models loaded")
+    args = parser.parse_args()
+    if args.serve:
+        return serve()
+    if not (args.request and args.output and args.status):
+        parser.error("--request, --output and --status are required without --serve")
+    return run_job(args.request, args.output, args.status)
 
 if __name__ == "__main__":
     raise SystemExit(main())

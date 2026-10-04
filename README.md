@@ -22,7 +22,7 @@ Inference runs in a separate Python environment. Blender's Python does not need 
 
 1. Clone this fork: `git clone https://github.com/nopeburger/UniMate-B3D.git` and enter `UniMate-B3D`.
 2. With Python 3.10 available through the Windows `py` launcher, run `powershell -ExecutionPolicy Bypass -File .\scripts\setup.ps1` from the repository root. You can pass `-Python <path-to-python-3.10>` if needed. This creates `.venv` and downloads the UniMate and human-pose models into `models/`.
-3. In Blender, choose **Edit → Preferences → Get Extensions → Install from Disk** (or **Add-ons → Install from Disk**, depending on Blender version), select [`dist/unimate_motion-0.3.0.zip`](dist/unimate_motion-0.3.0.zip), and enable **UniMate Motion**.
+3. In Blender, choose **Edit → Preferences → Get Extensions → Install from Disk** (or **Add-ons → Install from Disk**, depending on Blender version), select [`dist/unimate_motion-0.4.0.zip`](dist/unimate_motion-0.4.0.zip), and enable **UniMate Motion**.
 4. In the 3D View, open the sidebar with **N**, select **UniMate**, and expand **Setup and generation settings**. Set **Project folder** to the cloned repository root and **Model folder** to `models/unimate_uniml3d_f60_v2` inside that root. These paths are local settings and are not bundled in the demo.
 
 To build the add-on ZIP from source instead, run `python scripts/package.py`. Its package is intentionally small; the backend and weights stay in the cloned project.
@@ -38,11 +38,11 @@ The [Blender add-on panel guide](docs/BLENDER_ADDON_GUIDE.md) explains every con
 ## Generate motion
 
 1. Select a simple, single-root deform armature, or assign it in **Rig**. Choose **Human**, **Animal / Creature**, or **Other articulated model**, set the direction the rig faces in armature-local space, and click **Check Rig**.
-2. For one motion, choose **Single prompt**, enter the prompt, frame count, and start frame. For a sequence, choose **Prompt timeline** and add prompt clips with inclusive, consecutive frame ranges. There can be no gaps or overlaps. Each prompt generates up to 60 new frames; longer ranges retime that motion.
+2. For one motion, choose **Single prompt**, enter the prompt, frame count, and start frame. For a sequence, choose **Prompt timeline** and add prompt clips with inclusive, consecutive frame ranges. There can be no gaps or overlaps. The model generates 60-frame windows; a clip longer than one window gets chained windows, so it contains new motion rather than a slowed-down copy (turn off **Generate long clips in full** to stretch one window instead).
 3. Optionally assign a static **Ground mesh** in the advanced settings. **Motion cleanup** is enabled by default and estimates self-collisions, ground penetration, stance, foot/paw tilt, and support-limb bend from the rig's weighted meshes.
 4. Click **Generate Motion**. Blender remains interactive while the local backend runs. When the status reports that motion is ready, click **Apply Motion**. This creates a new Action; save your `.blend` file.
 
-The first generation also fetches the text encoder into the local cache. Each job writes its request, status, log, and result under the local `outputs/` directory. These files are excluded from Git.
+The first generation also fetches the text encoder into the local cache. With **Keep model loaded** (on by default), the backend stays running between generations so later runs skip model loading; it unloads after 15 idle minutes, with **Unload Model**, when another file is opened, or when Blender closes. Each job writes its request, status, log, and result under the local `outputs/` directory. These files are excluded from Git.
 
 ### Pose references
 
@@ -59,3 +59,9 @@ The backend builds UniMate conditioning from the Blender rest skeleton and uses 
 ## Licenses and credits
 
 Upstream UniMate code is MIT licensed; its original [license](LICENSE) and [README](docs/UPSTREAM_README.md) are retained. The Blender integration in `addon/unimate_motion` is GPL-3.0-or-later ([license](addon/unimate_motion/LICENSE.txt)). The integration also includes the upstream MIT notice ([notice](addon/unimate_motion/UNIMATE_LICENSE.txt)). No training dataset, model weights, external character assets, or development outputs are bundled.
+
+**Model weights are not covered by these code licenses.** The released [UniMate checkpoints](https://huggingface.co/Linzhan/UniMate) are licensed **CC BY-NC 4.0** (non-commercial). Check that license before using the model or its generated motion commercially.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the development setup, the regression tests in `tests/`, and how to keep the merged upstream code current.
