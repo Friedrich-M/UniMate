@@ -57,7 +57,19 @@ assert bend_counts["foot.left"]==1
 assert restored_p[0,2,1]<0 and np.allclose(restored_p[0,3],flipped_p[0,3],atol=1e-7)
 rebuilt,_=forward_kinematics(restored_p[:,0],to_local(restored_r,bend_rig["parents"]),bend_rig)
 assert np.allclose(rebuilt,restored_p,atol=1e-7)
-result=dict(passed=["grounded support reduces slide","root path preserved","bone lengths preserved",
+# A knee swivelling gradually away from the generated side is held there on
+# every frame; a threshold-based fix popped it back on single frames.
+steps=30
+swing_local=np.tile(np.eye(3),(steps,5,1,1))
+for t in range(steps):
+    swing_local[t,1]=Rotation.from_euler("z",4*t,degrees=True).as_matrix()
+source_many=np.repeat(source_p,steps,axis=0)
+swung_p,swung_r=forward_kinematics(np.tile([0,0,1.],(steps,1)),swing_local,bend_rig)
+held_p,_,_=preserve_bend(swung_p,swung_r,source_many,bend_rig,[dict(profile=bend_rig["foot_profiles"][0])])
+knee_jerk=np.linalg.norm(np.diff(held_p[:,2],2,axis=0),axis=1).max()
+assert knee_jerk<.01, knee_jerk
+assert held_p[:,2,1].max()<0, "Knee left the generated side"
+result=dict(passed=["swivelling knee held smoothly","grounded support reduces slide","root path preserved","bone lengths preserved",
                     "inclined mesh height and normal","outside-mesh fallback","phase-aware limits",
                     "planted knee keeps generated bend side"],
             planted_step_before=report["median_planted_step_before"],

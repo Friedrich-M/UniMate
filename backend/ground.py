@@ -337,9 +337,12 @@ def solve_contacts(positions,rotations,skeleton,feet,surface,windows):
 def preserve_bend(positions, rotations, source_positions, skeleton, feet):
     """Keep a two-bone knee/elbow on the side chosen by the generated pose.
 
-    Planted-foot IK can pull a nearly straight limb across its pole, making the
-    knee reverse as the pelvis turns around the fixed foot. Reconstructing the
-    knee on the source side preserves both segment lengths and the ankle pose.
+    Planted-foot IK can swing a limb around the hip-ankle line, and pull a
+    nearly straight limb across its pole so the knee reverses as the pelvis
+    turns around the fixed foot. Every frame reconstructs the knee in the
+    generated pose's swivel plane, preserving both segment lengths and the
+    ankle pose. Correcting only frames past a threshold made the knee pop
+    between corrected and uncorrected frames.
     """
     def align(start, target):
         a, b = unit(start), unit(target)
@@ -386,10 +389,9 @@ def preserve_bend(positions, rotations, source_positions, skeleton, feet):
             radius = np.sqrt(max(length_a ** 2 - along ** 2, 0.))
             if radius < 1e-7:
                 continue
-            current = k - h - direction * np.dot(k - h, direction)
-            if np.dot(current, pole) >= .7 * radius:
-                continue
             target_k = h + direction * along + pole * radius
+            if np.linalg.norm(target_k - k) < 1e-4 * leg:
+                continue
             upper_new = align(k - h, target_k - h) @ rot[t, upper]
             lower_new = align(a - k, a - target_k) @ rot[t, lower]
             upper_parent = skeleton["parents"][upper]
