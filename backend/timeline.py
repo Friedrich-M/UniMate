@@ -65,6 +65,25 @@ def to_local(rotations, parents):
     return local
 
 
+def smooth_motion(positions, rotations, skeleton, sigma):
+    """Gaussian-smooth every joint's local rotation and the root path over time.
+    sigma is in frames; 0 returns the motion unchanged."""
+    if sigma<=0 or len(positions)<3:
+        return positions, rotations
+    from scipy.ndimage import gaussian_filter1d
+    from scipy.spatial.transform import Rotation
+    local=to_local(rotations,skeleton["parents"])
+    frames,joints=local.shape[:2]
+    quat=Rotation.from_matrix(local.reshape(-1,3,3)).as_quat().reshape(frames,joints,4)
+    for t in range(1,frames):  # keep neighbouring frames in one hemisphere
+        flip=np.einsum("jk,jk->j",quat[t],quat[t-1])<0
+        quat[t][flip]*=-1
+    quat=gaussian_filter1d(quat,sigma,axis=0,mode="nearest")
+    quat/=np.linalg.norm(quat,axis=-1,keepdims=True)
+    local=Rotation.from_quat(quat.reshape(-1,4)).as_matrix().reshape(frames,joints,3,3)
+    root=gaussian_filter1d(positions[:,0],sigma,axis=0,mode="nearest")
+    return forward_kinematics(root,local,skeleton)
+
 def forward_kinematics(root, local, skeleton):
     """Rebuild heads from fixed rest offsets, never interpolate child translations."""
     parents = skeleton["parents"]

@@ -7,7 +7,7 @@ import numpy as np
 from scipy.spatial.transform import Rotation
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT/"backend"))
-from timeline import retime, forward_kinematics, to_local
+from timeline import retime, forward_kinematics, to_local, smooth_motion
 spec = importlib.util.spec_from_file_location("geometry", ROOT/"addon/unimate_motion/motion.py")
 geo = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(geo)
@@ -85,10 +85,22 @@ plan_windows([dict(start=1,end=600,references=[dict(frame=301),dict(frame=305)])
 # retime maps references through the same native index for chained spans.
 chained=[dict(start=1,end=180,references=[dict(frame=90)])]
 assert native_index(chained[0],chained[0]["references"][0],160)==79
+# Smoothing: 0 is the identity; otherwise rough rotations calm down and bone lengths hold.
+_rng=np.random.default_rng(3)
+_sk=dict(parents=[-1,0,1],heads=[[0,0,0],[0,.5,0],[0,1,0]])
+_loc=np.tile(np.eye(3),(40,3,1,1))
+_loc[:,1:]=Rotation.from_rotvec(_rng.normal(0,.3,(80,3))).as_matrix().reshape(40,2,3,3)
+_root=np.zeros((40,3))
+_p,_r=forward_kinematics(_root,_loc,_sk)
+_p0,_r0=smooth_motion(_p,_r,_sk,0)
+assert _p0 is _p and _r0 is _r
+_ps,_rs=smooth_motion(_p,_r,_sk,2.0)
+assert np.abs(np.diff(_ps,2,axis=0)).mean()<np.abs(np.diff(_p,2,axis=0)).mean()*.5
+assert np.allclose(np.linalg.norm(_ps[:,1]-_ps[:,0],axis=-1),.5,atol=1e-5)
 report=dict(passed=["window planning","chained reference slots","exact reference frame","earlier prompt preserved","no sit rotation spike",
                     "no endpoint root snap","FK bone lengths","disable editing",
                     "multiple and first-frame references","interior reference release",
-                    "short and stretched clips"],
+                    "short and stretched clips","motion smoothing"],
             approach_max_degrees=float(step[59:].max()))
 (ROOT/"tests/artifacts/timeline-regressions.json").write_text(json.dumps(report,indent=2))
 print(json.dumps(report,indent=2))

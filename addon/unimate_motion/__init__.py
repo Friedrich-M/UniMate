@@ -33,6 +33,8 @@ class UniMateSettings(bpy.types.PropertyGroup):
     ground_object: PointerProperty(name="Ground mesh", type=bpy.types.Object,
         poll=lambda self, obj: obj.type == "MESH",
         description="Optional static surface for foot and paw contact; otherwise use the rest sole level")
+    smoothing: FloatProperty(name="Motion smoothing", default=0.0, min=0.0, max=4.0, precision=1,
+        description="Smooth the generated motion over time, in frames. Calms jitter and fast head or limb jerks that some non-human rigs get (dragons, long necks) at the cost of some sharpness; 1.5 to 2.5 is a good start. 0 leaves the motion as generated")
     motion_cleanup: BoolProperty(name="Motion cleanup", default=True,
         description="Correct self-collisions, ground contact and extreme foot/paw rotations; intersecting reference poses may be adjusted")
     overlap: IntProperty(name="Transition context", default=10, min=1, max=30)
@@ -320,7 +322,7 @@ class UNIMATE_OT_generate(bpy.types.Operator):
             request = dict(schema=1, skeleton=skeleton, prompt=settings.prompt.strip(),
                            experiment=str(exp), stats_family=settings.family, frames=settings.frames,
                            fps=settings.fps, seed=settings.seed, guidance=settings.guidance,
-                           motion_cleanup=settings.motion_cleanup,
+                           motion_cleanup=settings.motion_cleanup, smoothing=settings.smoothing,
                            ground=export_ground(rig, skeleton, settings.ground_object) if settings.motion_cleanup else None)
             if settings.mode == "TIMELINE":
                 request.update(clips.collect_schedule(settings, skeleton, context.scene))
@@ -434,6 +436,7 @@ class UNIMATE_PT_main(bpy.types.Panel):
             row.prop(settings, "frames")
             row.prop(settings, "seed")
             layout.prop(settings, "start_frame")
+        layout.prop(settings, "smoothing")
         layout.prop(settings, "motion_cleanup")
         if _job:
             layout.operator("unimate.cancel", icon="CANCEL")

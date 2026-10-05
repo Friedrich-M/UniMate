@@ -199,6 +199,9 @@ def generate(request, output, status):
     if not request.get("clips"):
         features = features[:frames]
     positions, rotations = load_geometry().decode_features(features, canonical)
+    if request.get("smoothing", 0) > 0:
+        from timeline import smooth_motion
+        positions, rotations = smooth_motion(positions, rotations, request["skeleton"], float(request["smoothing"]))
     if request.get("clips"):
         positions, rotations = retime(positions, rotations, spans, clips, request["skeleton"],
                                      request.get("transition_frames", 12),
