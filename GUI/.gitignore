@@ -1,0 +1,6 @@
+# Ignore compiled PyInstaller binaries and build artifacts in git commits
+*.exe
+*.spec
+build/
+dist/
+__pycache__/
